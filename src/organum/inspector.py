@@ -15,8 +15,56 @@ from __future__ import annotations
 import argparse
 import datetime
 import json
+import os
 import sys
 from pathlib import Path
+
+# 사용자-대면 문자열은 전부 이 표에서 — 로케일 자동(ORGANUM_LANG 우선, LANG 폴백).
+# organum 본체 CLI의 이중언어화도 같은 메커니즘으로 확장한다(observatory 제품화 때).
+MSG = {
+    "en": {
+        "desc": "Post-hoc metering — retroactively aggregate duration, tokens, and tool "
+                "use of AI agent sessions that ran in this folder (read-only, writes nothing)",
+        "help.path": "project folder (default: current)",
+        "help.window": "discovery window in days (default 45 — wider than vendor transcript retention)",
+        "help.json": "machine-readable JSON (feeds your analysis pipeline)",
+        "help.html": "save a self-contained HTML report (no server — open, share, archive)",
+        "err.nodir": "organum-inspector: no such folder: {path}",
+        "html.saved": "HTML report: {path} ({n} sessions)",
+        "hdr": "━ organum inspector · {name} · window {days:g}d · {n} sessions",
+        "empty": "  no sessions — no agent records found for this folder as cwd (widen with --window)",
+        "col.start": "start", "col.dur": "duration",
+        "sum": "  Σ {vendor} {n} sessions · duration {dur} · in {in_} · tools {tools} · files {files}",
+        "legend": "\n  '—' = unmeasured (the vendor doesn't record it on disk) — never a silent zero."
+                  " Token semantics differ per vendor; duration, tools and files are the safe axes.",
+    },
+    "ko": {
+        "desc": "사후 계측 — 이 폴더에서 돌았던 AI 에이전트 세션들의 소요시간·토큰·툴 사용을 "
+                "소급 집계 (read-only, 아무것도 쓰지 않음)",
+        "help.path": "프로젝트 폴더 (기본: 현재 폴더)",
+        "help.window": "발견 창(일, 기본 45 — 벤더 transcript 보존 기간보다 넓게)",
+        "help.json": "기계용 JSON 출력 (AI 분석 파이프에 바로)",
+        "help.html": "자립형 HTML 리포트 파일로 저장 (서버 불요 — 브라우저로 열고 공유·보관)",
+        "err.nodir": "organum-inspector: 폴더가 없습니다: {path}",
+        "html.saved": "HTML 리포트: {path} ({n} 세션)",
+        "hdr": "━ organum inspector · {name} · 창 {days:g}일 · {n} 세션",
+        "empty": "  세션 없음 — 이 폴더를 cwd로 돈 에이전트 기록을 못 찾았습니다 (창을 넓히려면 --window)",
+        "col.start": "시작", "col.dur": "소요",
+        "sum": "  Σ {vendor} {n}세션 · 소요 {dur} · in {in_} · tools {tools} · files {files}",
+        "legend": "\n  '—' = 미측정(그 벤더가 디스크에 안 남김) — 0이 아닙니다."
+                  " 토큰 계수 의미는 벤더별로 다릅니다(교차 비교는 시간·툴·파일이 안전).",
+    },
+}
+
+
+def _lang() -> str:
+    v = os.environ.get("ORGANUM_LANG") or os.environ.get("LANG") or ""
+    return "ko" if v.lower().startswith("ko") else "en"
+
+
+def _t(key: str, **kw) -> str:
+    s = MSG[_lang()].get(key) or MSG["en"][key]
+    return s.format(**kw) if kw else s
 
 
 def _dur_s(first_ts, last_ts) -> float | None:
@@ -61,12 +109,12 @@ def collect(path: Path, window_days: float) -> list:
 
 
 def render(cells: list, path: Path, window_days: float) -> str:
-    lines = [f"━ organum inspector · {path.name} · 창 {window_days:g}일 · {len(cells)} 세션"]
+    lines = [_t("hdr", name=path.name, days=window_days, n=len(cells))]
     if not cells:
-        lines.append("  세션 없음 — 이 폴더를 cwd로 돈 에이전트 기록을 못 찾았습니다"
-                     " (창을 넓히려면 --window)")
+        lines.append(_t("empty"))
         return "\n".join(lines)
-    hdr = f"  {'vendor':<9} {'model':<24} {'시작':<12} {'소요':>7} {'in':>8} {'out':>7} {'cache':>7} {'tools':>5} {'files':>5}"
+    hdr = (f"  {'vendor':<9} {'model':<24} {_t('col.start'):<12} {_t('col.dur'):>7}"
+           f" {'in':>8} {'out':>7} {'cache':>7} {'tools':>5} {'files':>5}")
     lines += [hdr, "  " + "─" * (len(hdr) - 2)]
     for c in cells:
         start = (c.get("first_ts") or "")[5:16].replace("T", " ") or "—"
@@ -82,32 +130,34 @@ def render(cells: list, path: Path, window_days: float) -> str:
         for v in vendors:
             vs = [c for c in cells if c["vendor"] == v]
             durs = [c["duration_s"] for c in vs if c["duration_s"] is not None]
-            tot_d = _fmt_dur(sum(durs)) if durs else "—"
             ins_ = [c["in_tok"] for c in vs if c.get("in_tok") is not None]
-            lines.append(f"  Σ {v:<7} {len(vs)}세션 · 소요 {tot_d}"
-                         f" · in {_fmt_tok(sum(ins_)) if ins_ else '—'}"
-                         f" · tools {sum(c['tool_calls'] for c in vs)}"
-                         f" · files {sum(len(c.get('files') or []) for c in vs)}")
-    lines.append("\n  '—' = 미측정(그 벤더가 디스크에 안 남김) — 0이 아닙니다."
-                 " 토큰 계수 의미는 벤더별로 다릅니다(교차 비교는 시간·툴·파일이 안전).")
+            lines.append(_t("sum", vendor=f"{v:<7}", n=len(vs),
+                            dur=_fmt_dur(sum(durs)) if durs else "—",
+                            in_=_fmt_tok(sum(ins_)) if ins_ else "—",
+                            tools=sum(c["tool_calls"] for c in vs),
+                            files=sum(len(c.get("files") or []) for c in vs)))
+    lines.append(_t("legend"))
     return "\n".join(lines)
 
 
 def main(argv: list | None = None) -> int:
-    ap = argparse.ArgumentParser(
-        prog="organum-inspector",
-        description="사후 계측 — 이 폴더에서 돌았던 AI 에이전트 세션들의 소요시간·토큰·툴 사용을 "
-                    "소급 집계 (read-only, 설치 외 아무것도 쓰지 않음)")
-    ap.add_argument("path", nargs="?", default=".", help="프로젝트 폴더 (기본: 현재 폴더)")
-    ap.add_argument("--window", type=float, default=45,
-                    help="발견 창(일, 기본 45 — 벤더 transcript 보존 기간보다 넓게)")
-    ap.add_argument("--json", action="store_true", help="기계용 JSON 출력 (AI 분석 파이프에 바로)")
+    ap = argparse.ArgumentParser(prog="organum-inspector", description=_t("desc"))
+    ap.add_argument("path", nargs="?", default=".", help=_t("help.path"))
+    ap.add_argument("--window", type=float, default=45, help=_t("help.window"))
+    ap.add_argument("--json", action="store_true", help=_t("help.json"))
+    ap.add_argument("--html", metavar="FILE", help=_t("help.html"))
     args = ap.parse_args(argv)
     path = Path(args.path).expanduser().resolve()
     if not path.is_dir():
-        print(f"organum-inspector: 폴더가 없습니다: {path}", file=sys.stderr)
+        print(_t("err.nodir", path=path), file=sys.stderr)
         return 1
     cells = collect(path, args.window)
+    if args.html:
+        from organum.htmlreport import inspector_page
+        out = Path(args.html).expanduser()
+        out.write_text(inspector_page(cells, path.name, args.window), encoding="utf-8")
+        print(_t("html.saved", path=out, n=len(cells)))
+        return 0
     if args.json:
         print(json.dumps(cells, ensure_ascii=False, indent=1))
     else:

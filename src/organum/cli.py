@@ -354,6 +354,17 @@ def cmd_observatory(args: argparse.Namespace) -> int:
         print(f"observatory: +{n} 세션 스냅샷 (발견 창 {args.window}일, 중복 제외)")
         return 0
     if args.obs_cmd == "report":
+        if args.html:
+            from organum.htmlreport import observatory_page
+            from organum.inspect import ts_age_seconds
+            live = [c for c in _ad.snapshot(state_dir.parent, window_min=30.0)
+                    if (ts_age_seconds(c.get("last_ts")) or 9e9) <= 1800]
+            recs = _obs.load(state_dir, since_days=args.days)
+            out = Path(args.html).expanduser()
+            out.write_text(observatory_page(live, recs, state_dir.parent.name, args.days),
+                           encoding="utf-8")
+            print(f"HTML 리포트: {out} (live {len(live)} · 역사 {len(recs)})")
+            return 0
         print(_obs.report(state_dir, state_dir.parent, days=args.days))
         return 0
     recs = _obs.load(state_dir, since_days=args.days)
@@ -363,7 +374,9 @@ def cmd_observatory(args: argparse.Namespace) -> int:
 
 def cmd_inspector(args: argparse.Namespace) -> int:
     from organum import inspector as insp
-    return insp.main([args.path, "--window", str(args.window)] + (["--json"] if args.json else []))
+    return insp.main([args.path, "--window", str(args.window)]
+                     + (["--json"] if args.json else [])
+                     + (["--html", args.html] if args.html else []))
 
 
 def cmd_backup(args: argparse.Namespace) -> int:
@@ -920,6 +933,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_insp2.add_argument("path", nargs="?", default=".", help="프로젝트 폴더 (기본: 현재 폴더)")
     p_insp2.add_argument("--window", type=float, default=45, help="발견 창(일, 기본 45)")
     p_insp2.add_argument("--json", action="store_true", help="기계용 JSON 출력")
+    p_insp2.add_argument("--html", metavar="FILE", help="자립형 HTML 리포트로 저장")
     p_insp2.set_defaults(func=cmd_inspector)
 
     p_obs = sub.add_parser("observatory", help="관측 영속화 — 세션 소비 스냅샷 축적(월 샤드)·통계 (transcript ~30일 시한부 대비)")
@@ -934,6 +948,7 @@ def build_parser() -> argparse.ArgumentParser:
                           help="그룹 축 (모델/역할/기원/벤더)")
     po_rep = obs_sub.add_parser("report", help="작업 모니터 리포트 — 지금(live)/오늘/역사를 분리된 밴드로")
     po_rep.add_argument("--days", type=float, default=30, help="역사 창(일, 기본 30)")
+    po_rep.add_argument("--html", metavar="FILE", help="자립형 HTML 리포트로 저장 (지금/역사 밴드)")
     p_obs.set_defaults(func=cmd_observatory)
 
     p_mcp = sub.add_parser("mcp", help="MCP(stdio) 서버 — 조율(relay/agora/roster)을 MCP 툴로 노출 (한 세포). MCP 에이전트가 native로 조율")

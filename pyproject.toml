@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "organum"
-version = "0.1.0"
+version = "0.1.1"
 description = "Organism Engineering CLI — accumulate identity, differentiated memory, world models and maps for the agent you already use."
 readme = "README.md"
 requires-python = ">=3.10"

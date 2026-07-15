@@ -28,6 +28,18 @@ def _fake_cells():
 
 
 class TestCollectRender(unittest.TestCase):
+    def setUp(self):
+        import os
+        self._lang = os.environ.get("ORGANUM_LANG")
+        os.environ["ORGANUM_LANG"] = "ko"   # 표시 단언은 KO 기준으로 고정
+
+    def tearDown(self):
+        import os
+        if self._lang is None:
+            os.environ.pop("ORGANUM_LANG", None)
+        else:
+            os.environ["ORGANUM_LANG"] = self._lang
+
     def _collect(self, fake):
         orig = adapters.snapshot
         adapters.snapshot = lambda cwd, window_min=30.0, adapters=None, deep=False: fake
@@ -62,6 +74,25 @@ class TestCollectRender(unittest.TestCase):
     def test_collect_json_roundtrip(self):
         cells = self._collect(_fake_cells())
         self.assertEqual(json.loads(json.dumps(cells))[0]["vendor"], "codex")
+
+    def test_locale_switches_output_language(self):
+        import os
+        cells = self._collect(_fake_cells())
+        orig = os.environ.get("ORGANUM_LANG")
+        try:
+            os.environ["ORGANUM_LANG"] = "en"
+            en = inspector.render(cells, Path("/x/p"), 45)
+            self.assertIn("sessions", en)
+            self.assertIn("never a silent zero", en)
+            os.environ["ORGANUM_LANG"] = "ko"
+            ko = inspector.render(cells, Path("/x/p"), 45)
+            self.assertIn("세션", ko)
+            self.assertIn("미측정", ko)
+        finally:
+            if orig is None:
+                os.environ.pop("ORGANUM_LANG", None)
+            else:
+                os.environ["ORGANUM_LANG"] = orig
 
 
 if __name__ == "__main__":

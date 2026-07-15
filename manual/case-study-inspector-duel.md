@@ -1,7 +1,8 @@
 # 케이스 스터디 — 같은 과제, 두 에이전트: 사후 계측은 무엇을 보여주나
 
 *2026-07-15, ludex-design. 원자료: [case-study-inspector-duel.json](case-study-inspector-duel.json).
-계측 도구: `organum-inspector`(read-only 사후 계측). 매뉴얼·블로그 소재용으로 보존.*
+계측 도구: `organum-inspector`(read-only 사후 계측). 매뉴얼·블로그 소재용으로 보존.
+English version: [case-study-inspector-duel.en.md](case-study-inspector-duel.en.md).*
 
 ## 설정
 
