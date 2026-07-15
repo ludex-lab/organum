@@ -1,0 +1,1 @@
+{"sequence": ["[Error: CLI timed out]", "[Error: CLI timed out]", "[error: rate limited]", "ECONNREFUSED", "[Error: host unreachable]"], "expected_streak_at": 5, "source": "organum v0", "note": "호스트 outage 시퀀스 — §7.2 리트머스 (ludex 25턴 시나리오의 축약판, 실측판은 교환 시 수령)"}

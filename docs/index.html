@@ -262,6 +262,7 @@
         <a href="#organs" data-i18n="nav.org">Organs</a>
         <a href="#research" data-i18n="nav.res">Research</a>
         <a href="#tools" data-i18n="nav.tool">Tools</a>
+        <a href="#product" data-i18n="nav.prod">Product</a>
         <a href="#boundary" data-i18n="nav.bnd">Boundary</a>
         <span class="chip">pre-1.0 · format v0 frozen</span>
       </nav>
@@ -524,6 +525,41 @@
     </div>
   </section>
 
+  <section id="product">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow" data-i18n="prod.eyebrow">Product · first release, in beta</span>
+        <h2 data-i18n="prod.h2">Start with a question you already have: what did my agents actually do?</h2>
+        <p class="muted col" data-i18n-html="prod.p">The first piece of organum to ship is <b class="fx">inspector</b> — post-hoc metering for AI coding agents. Point it at any project folder, and it reads the session records your agent CLIs already leave on disk: how long each session ran, what it consumed, which tools it leaned on. Nothing to set up, nothing written to your project — <em>it even works on work you finished last week</em>. One package installs the whole family, and everything versions together while it grows in beta.</p>
+      </div>
+      <div class="how-grid">
+        <div class="vitals" role="img" aria-label="Example of organum-inspector output">
+          <div class="v-head">$ organum-inspector ~/projects/design-duel</div>
+          <div class="v-rule" data-i18n="prod.vrule">─ same task · two agents ─────</div>
+          <div class="v-row">&nbsp;&nbsp;codex&nbsp; gpt-5.6&nbsp;&nbsp;<span class="k">3.0h</span> · in 34.2M · tools 430</div>
+          <div class="v-row">&nbsp;&nbsp;grok&nbsp;&nbsp; grok-4.5&nbsp;<span class="k">17.8m</span> · in 116K · tools 179</div>
+          <div class="v-rule" data-i18n="prod.vrule2">─ verdict · three cross-reviews ─</div>
+          <div class="v-row" data-i18n-html="prod.vrow">&nbsp;&nbsp;quality: codex, <span class="k">unanimous</span> —<br>&nbsp;&nbsp;10× time bought a comfortable win,<br>&nbsp;&nbsp;not dominance</div>
+          <div class="v-foot">─ read-only · no setup ──</div>
+        </div>
+        <div class="feat-list">
+          <div class="feat">
+            <div class="ft"><span class="cmd sm"><span class="p">$</span> pip install organum</span></div>
+            <p data-i18n-html="prod.f1"><b class="fx">Sixty seconds to first numbers.</b> <span class="mono">cd your-project &amp;&amp; organum-inspector .</span> — duration, tokens, tool calls and files per session, across five vendors (Claude Code · Codex · Gemini · Grok · OpenCode). Unmeasured stays an honest <span class="mono">—</span>, never a silent zero. <span class="mono">--json</span> feeds your own analysis. <a href="https://github.com/ludex-lab/organum/blob/main/manual/quickstart-observe.md">Manual →</a></p>
+          </div>
+          <div class="feat">
+            <div class="ft"><span class="eyebrow" style="color:var(--moss)" data-i18n="prod.f2eb">The case we measured ourselves</span></div>
+            <p data-i18n-html="prod.f2">We gave Codex and Grok the exact same design task. Grok finished in 17.8 minutes; Codex took ten times longer. Then commissioner, winner, and loser cross-reviewed the outputs — the verdict was unanimous, Codex's quality won, and the most rigorous review came from the loser. Cost measured by inspector, quality judged by the agents themselves: the choice between them stops being taste and becomes data. <a href="https://github.com/ludex-lab/organum/blob/main/manual/case-study-inspector-duel.md">Full case study →</a></p>
+          </div>
+          <div class="feat">
+            <div class="ft"><span class="cmd sm"><span class="p">$</span> organum web · observatory</span></div>
+            <p data-i18n-html="prod.f3"><b class="fx">When one glance isn't enough.</b> <span class="mono">web</span> is the live control tower; <span class="mono">observatory</span> keeps a history that survives vendor cleanup — agent CLIs quietly delete session records within weeks — with daily trends, model mix, and cost. Same discipline throughout: read-only, your project untouched.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section id="boundary" class="boundary">
     <div class="wrap">
       <div class="sec-head">
@@ -613,7 +649,7 @@
     // Korean strings. English is authored inline in the HTML and snapshotted below,
     // so only KO lives here (same pattern as organum web's I18N dict).
     var KO = {
-      'nav.phil':'철학', 'nav.org':'기관', 'nav.res':'연구', 'nav.tool':'도구', 'nav.bnd':'경계',
+      'nav.phil':'철학', 'nav.org':'기관', 'nav.res':'연구', 'nav.tool':'도구', 'nav.prod':'제품', 'nav.bnd':'경계',
       'hero.eyebrow':'Organism Engineering · 유기체 공학',
       'hero.h1':'여러 브레인,<br>하나의 <span class="em">유기체.</span>',
       'hero.lede':'한 모델을 점점 더 똑똑하게 만드는 무한경쟁이 진행되고 있습니다. 그렇지만, 다른 미래에 대한 그림도 가능하지 않을까? 우리는 <b class="fx">‘팀’</b>에서 미래를 바라보고자 합니다. 서로 다른 기업에서 온, 때로는 더 작고 값싼 AI들이 저마다 자기에게 맞는 역할을 맡고, 그 일을 잘 해낼 도구를 손에 쥔다면 어떨까요? 이들은 <b class="fx">당신이 이미 사용하는 런타임 위에</b> 가볍게 올라가서 자신의 역할을 합니다. organum은 이들 팀에게 가장 중요한 요소들 — <b class="fx">기억과 분화, 면역과 규율</b> — 을 제공합니다. 흩어져 있던 브레인들이 <em>같이 기억하고, 하나의 유기체처럼 움직이기</em> 시작합니다. 그리고 이들과 함께 하는 당신은 여전히 그 루프 안에서 감독의 역할을 할 수 있습니다. 더 똑똑한 뇌 하나가 아니라, 더 나은 팀. 이를 위해 제공되는 <b class="fx">Augmented Intelligence</b>를 지향하는 것이 organum 입니다.',
@@ -708,6 +744,17 @@
       'feat3p':'<b class="fx">여러 세포(에이전트)들을 하나의 유기체처럼 움직이게 만드는 방법.</b> 폴더 우체통입니다. 사람이 편지를 넣으면, 세포가 알아서 당겨 읽죠. 가입(join)·읽음 커서·에티켓·provenance 등이 지원되며, 향후 더 많은 공유기억에 해당하는 업그레이드가 이루어집니다. 지휘자 없는 조율이 가능한 이유입니다. 사람이 관제사가 되어 메시지를 전달할 수는 있습니다.',
       'feat4eb':'아직 갈 길이 멉니다',
       'feat4p':'로스터(presence), soma(세포별 기관), MCP 인터페이스, 크로스-벤더 관찰 — Claude·Codex·Gemini·Grok·OpenCode 까지… 전부 같은 철학에서 자라날 것입니다.',
+
+      'prod.eyebrow':'제품 · 첫 배포, 베타',
+      'prod.h2':'이미 갖고 있던 질문에서 시작하세요 — 내 에이전트들, 실제로 뭘 한 거지?',
+      'prod.p':'organum에서 처음 배포되는 조각은 <b class="fx">inspector</b> — AI 코딩 에이전트의 사후 계측기입니다. 아무 프로젝트 폴더나 가리키면, 에이전트 CLI들이 이미 디스크에 남겨 둔 세션 기록을 읽어냅니다. 세션마다 얼마나 걸렸는지, 무엇을 소모했는지, 어떤 툴에 기댔는지. 설정할 것도 없고 프로젝트에 쓰는 것도 없어서, <em>지난주에 끝낸 작업에도 그대로 통합니다</em>. 패키지 하나로 제품군 전체가 설치되고, 베타로 자라는 동안 버전도 함께 올라갑니다.',
+      'prod.vrule':'─ 같은 과제 · 두 에이전트 ─────',
+      'prod.vrule2':'─ 판정 · 3인 교차 평가 ─────',
+      'prod.vrow':'&nbsp;&nbsp;품질: codex, <span class="k">만장일치</span> —<br>&nbsp;&nbsp;10배의 시간이 산 것은 압도가 아니라<br>&nbsp;&nbsp;여유 있는 우세',
+      'prod.f1':'<b class="fx">60초면 첫 숫자가 나옵니다.</b> <span class="mono">cd 내-프로젝트 && organum-inspector .</span> — 세션별 소요·토큰·툴·파일을 다섯 벤더(Claude Code·Codex·Gemini·Grok·OpenCode)에 걸쳐 봅니다. 못 잰 값은 정직하게 <span class="mono">—</span>로 남기고, 조용히 0으로 뭉개지 않아요. <span class="mono">--json</span>이면 바로 분석 파이프에 넣을 수 있고요. <a href="https://github.com/ludex-lab/organum/blob/main/manual/quickstart-observe.md">매뉴얼 →</a>',
+      'prod.f2eb':'우리가 직접 잰 사례',
+      'prod.f2':'Codex와 Grok에게 완전히 같은 디자인 과제를 맡겼습니다. Grok은 17.8분 만에 끝냈고, Codex는 열 배를 썼죠. 그다음 발주자·승자·패자가 서로의 산출물을 교차 평가했는데 — 판정은 만장일치, 품질은 Codex의 승리였습니다. 그리고 가장 꼼꼼한 평가서를 쓴 건 다름 아닌 패자였어요. 비용은 inspector가 재고 품질은 에이전트들이 서로 심사하면, 이 선택은 취향이 아니라 데이터가 됩니다. <a href="https://github.com/ludex-lab/organum/blob/main/manual/case-study-inspector-duel.md">케이스 스터디 전문 →</a>',
+      'prod.f3':'<b class="fx">한 번 훑는 걸로 부족해지면.</b> <span class="mono">web</span>은 라이브 관제탑, <span class="mono">observatory</span>는 벤더가 몇 주 만에 조용히 지워버리는 세션 기록 너머로 역사를 쌓는 관측소입니다 — 일별 추이, 모델 믹스, 비용까지. 전부 같은 규율 위에 있습니다. read-only, 당신의 프로젝트는 건드리지 않습니다.',
 
       'bnd.eyebrow':'경계 · 하는 것과 하지 않는 것',
       'bnd.h2':'공유기억과 모니터링, 규율을 제공합니다.',

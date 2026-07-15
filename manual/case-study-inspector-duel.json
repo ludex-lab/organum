@@ -1,0 +1,320 @@
+{
+ "case": "ludex-design duel — 같은 과제, 두 에이전트 (codex vs grok)",
+ "measured_with": "organum-inspector (사후 계측, read-only 전량 파싱)",
+ "date": "2026-07-15",
+ "phase_boundary_note": "phase1=과제 수행(각 세션의 1차 계측 시점 마지막 이벤트까지), phase2=상호 산출물 평가(그 이후)",
+ "phases": {
+  "codex gpt-5.6-sol": {
+   "phase1_task": {
+    "start": "2026-07-15T10:14:33.790Z",
+    "end": "2026-07-15T13:12:45.426Z",
+    "duration_min": 178.2,
+    "in_tok": 34168929,
+    "cached_in": 32322560,
+    "out_tok": 64318,
+    "tool_calls": 430,
+    "tool_calls_note": "function 279 + custom 151",
+    "patches": 7,
+    "files": 8
+   },
+   "phase2_cross_eval": {
+    "end": "2026-07-15T13:37:30.244Z",
+    "duration_min": 24.7,
+    "in_tok_delta": 2131330,
+    "cached_in_delta": 2032384,
+    "out_tok_delta": 9552,
+    "tool_calls": 12,
+    "patches": 2,
+    "files_delta": 2
+   }
+  },
+  "grok grok-4.5": {
+   "phase1_task": {
+    "start": "2026-07-15T12:10:34.409Z",
+    "end": "2026-07-15T12:28:23.689Z",
+    "duration_min": 17.8,
+    "in_tok": 116068,
+    "out_tok": null,
+    "cache": null,
+    "tool_calls": 179,
+    "tool_top": {
+     "run_terminal_command": 52,
+     "image_gen": 48,
+     "image_edit": 33,
+     "read_file": 31,
+     "write": 5,
+     "todo_write": 4
+    },
+    "files": 37
+   },
+   "phase2_cross_eval": {
+    "end": "2026-07-15T13:36:36.065Z",
+    "duration_min_wall": 68.2,
+    "duration_note": "유휴 포함 wall time (평가 지시 시점 미기록)",
+    "in_tok_delta": 15637,
+    "tool_calls": 11,
+    "files_delta": 6
+   }
+  }
+ },
+ "honesty": [
+  "grok out/cache = 원천 부재(None) — 0이 아님",
+  "토큰 계수 의미 벤더별 상이(codex=호출 누적 총량·캐시 포함) — 교차 비교 안전축은 시간·툴·파일",
+  "모델과 하네스가 모두 다름 — 조합의 비교이지 하네스 단독 비교 아님"
+ ],
+ "raw_cells_at_final_measure": [
+  {
+   "id": "019f6544",
+   "vendor": "codex",
+   "session_id": "019f6544-c36b-70e0-a36b-30c3796443e5",
+   "model": "gpt-5.6-sol",
+   "origin": "terminal",
+   "parent": null,
+   "in_tok": 36300259,
+   "out_tok": 73870,
+   "cache": 34354944,
+   "tools": {
+    "exec": 163,
+    "wait": 279
+   },
+   "files": [
+    "/Users/jihoon/Projects/ludex-design/cozy-dusk/SKIN.md",
+    "/Users/jihoon/Projects/ludex-design/cozy-dusk/skin.json",
+    "/Users/jihoon/Projects/ludex-design/sunny-suburb/SKIN.md",
+    "/Users/jihoon/Projects/ludex-design/sunny-suburb/skin.json",
+    "/Users/jihoon/Projects/ludex-design/tmp/blind_compare_assets.py",
+    "/Users/jihoon/Projects/ludex-design/tmp/blind_eval/blind_scorecard.md",
+    "/Users/jihoon/Projects/ludex-design/tmp/imagegen/make_cozy_dusk_contact_sheets.py",
+    "/Users/jihoon/Projects/ludex-design/tmp/imagegen/process_cozy_dusk.py",
+    "/Users/jihoon/Projects/ludex-design/tmp/imagegen/process_sunny_suburb.py",
+    "/Users/jihoon/Projects/ludex-design/tmp/imagegen/validate_cozy_dusk.py"
+   ],
+   "branch": null,
+   "skills": {},
+   "last_ts": "2026-07-15T13:37:30.244Z",
+   "path": "/Users/jihoon/.codex/sessions/2026/07/15/rollout-2026-07-15T19-13-53-019f6544-c36b-70e0-a36b-30c3796443e5.jsonl",
+   "first_ts": "2026-07-15T10:14:33.790Z",
+   "fallback": false,
+   "duration_s": 12176.454,
+   "tool_calls": 442
+  },
+  {
+   "id": "019f65af",
+   "vendor": "grok",
+   "session_id": "019f65af-97a9-7133-98f8-87d665f1390f",
+   "model": "grok-4.5",
+   "origin": "terminal",
+   "parent": null,
+   "in_tok": 131705,
+   "out_tok": null,
+   "cache": null,
+   "tools": {
+    "list_dir": 1,
+    "grep": 1,
+    "run_terminal_command": 57,
+    "read_file": 37,
+    "todo_write": 4,
+    "write": 5,
+    "image_gen": 48,
+    "image_edit": 33,
+    "get_command_or_subagent_output": 3,
+    "search_replace": 1
+   },
+   "files": [
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/1.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/10.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/11.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/12.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/13.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/14.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/15.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/16.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/17.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/18.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/19.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/2.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/21.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/22.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/23.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/24.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/31.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/32.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/33.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/50.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/51.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/54.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/55.jpg",
+    "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f/images/9.jpg",
+    "/Users/jihoon/.grok/skills/imagine/SKILL.md",
+    "/Users/jihoon/Projects/ludex-design",
+    "/Users/jihoon/Projects/ludex-design/cozy-dusk/SKIN.md",
+    "/Users/jihoon/Projects/ludex-design/cozy-dusk/skin.json",
+    "/Users/jihoon/Projects/ludex-design/deliver/cozy-dusk/SKIN.md",
+    "/Users/jihoon/Projects/ludex-design/deliver/cozy-dusk/skin.json",
+    "/Users/jihoon/Projects/ludex-design/deliver/sunny-suburb/SKIN.md",
+    "/Users/jihoon/Projects/ludex-design/deliver/sunny-suburb/skin.json",
+    "/Users/jihoon/Projects/ludex-design/order_skin_cozy_dusk_20260715.md",
+    "/Users/jihoon/Projects/ludex-design/order_skin_sunny_suburb_20260715.md",
+    "/Users/jihoon/Projects/ludex-design/tmp/grok/process_skin.py",
+    "/Users/jihoon/Projects/ludex-design/tmp/imagegen/process_cozy_dusk.py",
+    "/Users/jihoon/Projects/ludex-design/tmp/imagegen/validate_cozy_dusk.py",
+    "/tmp/skin-compare/sheets/codex-cozy-houses.png",
+    "/tmp/skin-compare/sheets/codex-sunny-houses.png",
+    "/tmp/skin-compare/sheets/cozy-sidebyside.png",
+    "/tmp/skin-compare/sheets/grok-cozy-houses.png",
+    "/tmp/skin-compare/sheets/grok-sunny-houses.png",
+    "/tmp/skin-compare/sheets/sunny-sidebyside.png"
+   ],
+   "branch": null,
+   "skills": {},
+   "last_ts": "2026-07-15T13:36:36.065752Z",
+   "path": "/Users/jihoon/.grok/sessions/%2FUsers%2Fjihoon%2FProjects%2Fludex-design/019f65af-97a9-7133-98f8-87d665f1390f",
+   "first_ts": "2026-07-15T12:10:34.409436Z",
+   "fallback": false,
+   "duration_s": 5161.656316,
+   "tool_calls": 190
+  }
+ ],
+ "quality_evaluation": {
+  "task": "게임 타일셋 2세트 제작 (cozy-dusk · sunny-suburb)",
+  "evaluators": {
+   "claude_commissioner": "수집됨",
+   "grok": "수집됨",
+   "codex": "수집됨"
+  },
+  "claude_commissioner": {
+   "method": "비교 시트 8장 + 타일링 검사 + 실전 보드 합성 2장",
+   "cozy_dusk": {
+    "verdict": "Codex 명확한 승",
+    "codex_strengths": "39장 한 세계 응집 — 모티프 번역 정확(별자리 지붕·잔디 아치·촛농 처마·실타래), 실전 합성서 마을 즉시 성립",
+    "grok_issues": [
+     "lightkeeper·windmill 하단 미제거 배경 잔재(청록 패치) 2건",
+     "플랫 로우폴리 vs 사진풍 텍스처 혼재(팩 내 드리프트)",
+     "시설군(연보라) vs 주택군(초록지붕+테라코타) 팔레트 분리"
+    ]
+   },
+   "sunny_suburb": {
+    "verdict": "Codex 우세, Grok 선전",
+    "codex": "아키타입 개성 생존(별 채광창·촛농 지붕·퍼걸러 agora); 잔디 스커트=계약 이탈이나 실전서 '앞마당'으로 강점 반전(수용 권고)",
+    "grok": "계약 준수 우수·깔끔, 단 generic·smith·plinth 동질(집=캐릭터 시스템서 개성 부족)"
+   }
+  },
+  "user_jj": "Grok 심플 · Codex 디테일 — 취향 차이 수준, 생각보다 큰 차이 아님",
+  "synthesis": "10배 비용 = 압도가 아닌 여유 있는 우세. 조합 선택은 과제 성격(히어로 에셋=Codex형 vs 볼륨·규격=Grok형)",
+  "codex": {
+   "method": "블라인드 시도 — 무작위 A/B 배정, 점수 확정 후 정체 공개 (A=Codex, B=Grok)",
+   "rubric": {
+    "계약 준수": 20,
+    "시각적 완성도": 25,
+    "세트 일관성": 20,
+    "모티프 전달력": 20,
+    "게임 적용성": 15
+   },
+   "scores": {
+    "cozy_dusk": {
+     "codex": 94,
+     "grok": 75
+    },
+    "sunny_suburb": {
+     "codex": 95,
+     "grok": 79
+    },
+    "mean": {
+     "codex": 94.5,
+     "grok": 77.0
+    }
+   },
+   "codex_reasons": [
+    "카메라·재질·조명·디테일 밀도 일관",
+    "축소 화면에서 집 성격 구분(comet·moss·nova·loom·wick)",
+    "두 팩 간 차별 분명(슬레이트·목재·등불 vs 파스텔·화이트트림·잔디)",
+    "#0d1117 캔버스 실루엣 판독 안정",
+    "지면·소품 플랫 셰이딩 통일",
+    "SKIN.md 프롬프트 기록 구체적(재현성)"
+   ],
+   "grok_issues": [
+    "로우폴리·회화·반실사 혼재",
+    "주택 동형 반복",
+    "바닥판·그림자 계약 충돌",
+    "창문 글로우·랜턴 녹색 크로마 잔여",
+    "지면 타일 재질·밝기 편차, 물이 종이조각처럼",
+    "SKIN.md '발주서와 동일' 생략(기록 요구에 덜 충실)"
+   ],
+   "self_criticism": [
+    "일부 건물 minimal texture 기준보다 장식 과다",
+    "dormant_veil이 웅덩이처럼 보임",
+    "Grok 오버레이 일부는 개별로는 더 매력적"
+   ],
+   "technical_checks": "둘 다 통과(파일수·이름·크기·RGBA·앵커·다이아몬드 접점·ZIP) — 기술 실격 아닌 품질 판정"
+  },
+  "grok": {
+   "method": "자기 산출물 평가 명시 — 측정 가능 항목 우선, 시각·연출 후행. 픽셀 지표 계산",
+   "contract_layer": "완전 동점 — 39장·RGBA·크기·크로마 0px·다이아몬드·앵커·skin.json 둘 다 통과",
+   "metrics": {
+    "집 평균색 stdev 합(낮을수록 일관)": {
+     "cozy": {
+      "codex": 17.5,
+      "grok": 25.6
+     },
+     "sunny": {
+      "codex": 28.9,
+      "grok": 59.3
+     }
+    },
+    "fill stdev": {
+     "cozy": {
+      "codex": 0.07,
+      "grok": 0.104
+     },
+     "sunny": {
+      "codex": 0.062,
+      "grok": 0.109
+     }
+    },
+    "평균 fill 밀도": {
+     "cozy": {
+      "codex": 0.89,
+      "grok": 0.77
+     },
+     "sunny": {
+      "codex": 0.82,
+      "grok": 0.76
+     }
+    }
+   },
+   "scores_10pt": {
+    "cozy_dusk": {
+     "codex": 8.0,
+     "grok": 6.0
+    },
+    "sunny_suburb": {
+     "codex": 8.5,
+     "grok": 5.5
+    },
+    "overall": {
+     "codex": 8.2,
+     "grok": 5.8
+    }
+   },
+   "verdict": "두 스킨 모두 Codex 승 — 패자 동의",
+   "self_flags": [
+    "자기 팩 moss/nova 파일-모티프 혼선 의심 표면화",
+    "스타일 드리프트·모티프 약화 인정"
+   ],
+   "own_strengths_noted": [
+    "경량 패키지",
+    "문장 그대로의 로우폴리에 더 가까운 순간",
+    "계약 자동 검증 동급"
+   ],
+   "recommendation": "납품은 Codex 산출물; 자기 것은 '유효한 대안 드래프트'(keep/regen 가이드 포함)"
+  },
+  "cross_analysis_final": {
+   "방향": "만장일치(3평가자+사용자) Codex 우위 — 패자 동의 = 최강 신호",
+   "격차_스펙트럼": "사용자(취향차) < 발주자(우세/선전) < Grok 자기평가(2.4/10) < Codex 자기평가(17.5/100)",
+   "자기편향_비대칭": "승자=자기에 최관대, 패자=자기에 최가혹 — 자기 산출물 편향은 대칭이 아니다",
+   "측정층위_모순": "Grok 자동검사 '크로마 0px' vs 시각 평가자 2인 '잔재/글로우 목격' — 자동 계약 통과 ≠ 시각 청결",
+   "방법론_다양성": "발주자=실전 합성 · Codex=블라인드 A/B+루브릭 · Grok=픽셀 지표 — 서로 다른 방법, 같은 방향(자연발생 perspective-diverse 검증)",
+   "경제학": "계약 레이어 동점 + 10배 비용 = 만장일치 품질 우위 구매. 계약 통과 목적이면 1/10 비용의 Grok형 충분, 히어로 에셋이면 Codex형이 값을 함"
+  }
+ }
+}

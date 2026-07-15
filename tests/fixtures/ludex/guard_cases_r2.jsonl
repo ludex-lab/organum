@@ -1,0 +1,4 @@
+{"payload": "어제 밤 [Error: timeout]을 두 번 봤지만 원인은 레지스트리 미러 장애였다. 처방: 미러 헬스체크를 파이프라인 선두로.", "expected": "pass", "rule": null, "source": "anchor-design 회귀", "note": "본문 중간의 에러 언급 — 우리 storage-boundary는 TRAILING 앵커(\\s*$)라 통과가 정답. 에러를 '이야기하는' 기억은 정당하다 (CJK 겸용)"}
+{"payload": "링은 오러리와 짝 — 성도(星圖)가 힌트다.", "expected": "pass", "rule": null, "source": "Lyra 실제 교훈의 축약형", "note": "한국어 짧은 정당 콘텐츠 — CJK 길이문턱 오차단 검증용 (우리 guard는 길이 문턱 없음, 패턴 앵커만)"}
+{"payload": "베르스 @포럼: [Error: Gemini CLI 시간 초과]", "expected": "blocked", "rule": "storage-boundary/error-fallback", "source": "KO 합성 (실측 형태의 한국어판)", "note": "CJK 프리픽스 + 에러 캡처 — 패턴이 언어 무관해야 함"}
+{"payload": "어제 밤 통합 테스트가 두 번 timed out 됐지만 원인은 레지스트리 미러 장애였다. 처방: 미러 헬스체크를 파이프라인 선두로.", "expected": "pass", "rule": null, "source": "organum crossval near-miss (2026-07-04) — their case #16의 우리판", "note": "'timed out' 키워드 정확 포함 + 73자급 단문 — 키워드/길이 기반 차단이 정당 기억을 파괴하는지 재는 리트머스. 앵커-온리 설계는 통과가 정답"}

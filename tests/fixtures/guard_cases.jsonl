@@ -1,0 +1,17 @@
+{"payload": "[Error: CLI timed out]", "expected": "blocked", "rule": "error-fallback", "source": "HANDOFF §3 실사고", "note": "원조 오염 사례 — 이것이 영속 기억이 되어 행동을 오염시켰다"}
+{"payload": "부분 응답까지는 생성됐다\n[Error: Gemini API key invalid\nsee https://console.example/keys for details]", "expected": "blocked", "rule": "error-fallback", "source": "ludex 릴레이 2026-07-04 ①", "note": "trailing 캡처 — 에러가 2줄에 걸침, DOTALL 없으면 놓친다"}
+{"payload": "[error: rate limited, retry after 60s]", "expected": "blocked", "rule": "error-fallback", "source": "ludex 릴레이 2026-07-04 ②", "note": "선두 prefix, 대소문자 무시"}
+{"payload": "[tool dispatch error: no tool named recall]", "expected": "blocked", "rule": "error-fallback", "source": "ludex 릴레이 2026-07-04 ③", "note": ""}
+{"payload": "Credit balance is too low", "expected": "blocked", "rule": "auth-billing", "source": "ludex 릴레이 2026-07-04 ④", "note": "증상은 error류, 원인은 auth 설정 — 별도 클래스"}
+{"payload": "[Error: Credit balance is too low]", "expected": "blocked", "rule": "auth-billing", "source": "organum 규칙 우선순위", "note": "error-fallback 패턴과 동시 매치 시 auth-billing이 우선 (처방이 다르므로)"}
+{"payload": "   ", "expected": "blocked", "rule": "empty-content", "source": "ludex 릴레이 2026-07-04 ⑤", "note": "성공의 부재 ≠ 성공"}
+{"payload": "deploy timed out", "expected": "flagged", "rule": "error-fallback", "source": "organum v0", "note": "v2: 비앵커 키워드는 표시만 — 단문이라도 정당한 언급일 수 있다 (하드차단은 앵커/무맥락 토큰만)"}
+{"payload": "오늘 배운 것: CI 파이프라인의 통합 테스트 단계가 어제 두 번 timed out 됐는데, 원인은 테스트 자체가 아니라 도커 이미지 풀이 레지스트리 미러 장애로 지연된 것이었다. 처방은 타임아웃 상향이 아니라 미러 헬스체크를 파이프라인 선두에 두는 것. 증상 하나로 근본 원인을 선언하지 말 것 — 진단이 처방보다 먼저라는 규율의 실전 사례였다.", "expected": "flagged", "rule": "error-fallback", "source": "organum v0", "note": "긴 정당한 교훈이 에러 키워드를 언급 — 차단하면 안 되고, 표시만"}
+{"payload": "P1 완료: 포맷 v0 동결, CLI 4명령 동작, 양대 레지스트리 선점", "expected": "pass", "rule": null, "source": "organum v0", "note": "정상 콘텐츠"}
+{"payload": "Traceback (most recent call last):\n  File \"distill.py\", line 42, in <module>", "expected": "blocked", "rule": "error-fallback", "source": "organum v0", "note": ""}
+{"payload": "Reached maximum budget ($0.001)", "expected": "blocked", "rule": "error-fallback", "source": "spike-recheck §2 실측", "note": "budget abort 페이로드 — is_error 분기 뚫고 와도 패턴이 막는다"}
+{"payload": "[Older tool result cleared to save context]", "expected": "blocked", "rule": "context-residue", "source": "Luca L1 실측 2026-07-04", "note": "제3종 — 에러도 빈 응답도 아닌 '컨텍스트의 잔해 ≠ 원문'. distill이 내용으로 오인하면 영속화"}
+{"payload": "Error: Parent directory does not exist", "expected": "blocked", "rule": "error-fallback", "source": "Luca L2 실측 2026-07-04 (MCP 도구, 2회)", "note": "브래킷 없는 선두 Error: 변형"}
+{"payload": "'mcp__foo__bar' has not been loaded yet. You do not have the correct parameter names for this tool.", "expected": "flagged", "rule": "error-fallback", "source": "Luca L3 실측 2026-07-04 (1회)", "note": "tool-loading 에러 — v2에서 flag로 하향 (비앵커 prose-가능 키워드; 표시 저장의 잔여 리스크 수용)"}
+{"payload": "배포 스크립트가 timed out 됐다 — 원인은 레지스트리 미러 장애였다. 처방: 헬스체크 선행.", "expected": "flagged", "rule": "error-fallback", "source": "organum v2 — ludex #6 near-miss 등록", "note": "짧은 CJK 정당 교훈 + 에러 키워드: v1 문턱 규칙이면 하드차단(정당 기억 파괴)됐을 케이스. 앵커/표시 이원화의 존재 이유"}
+{"payload": "distill 입력에서 '[Older tool result cleared to save context]' 문자열을 만나면 그건 내용이 아니라 잔해다 — 인용하지 말고 원문을 재조회하라.", "expected": "flagged", "rule": "context-residue", "source": "organum v2", "note": "잔해 그 자체(선두=blocked)와 잔해를 논하는 기억(본문 언급=flagged)의 분리 — near-miss 교훈의 context-residue 적용"}

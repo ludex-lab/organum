@@ -1,0 +1,21 @@
+{
+  "rules_version": 2,
+  "_comment": "guard 저장 경계 규칙 데이터 (docs/format-v0.md §7.1). 코드가 아니라 데이터인 이유: 랩 간 regression 셋 교환. 모든 regex는 IGNORECASE, trailing은 +DOTALL.",
+  "_design_note": "v2 (2026-07-04, ludex 교차검증 후): 길이 문턱 폐기 — CJK 편향 + 정당 단문 하드차단 위험 (near-miss: ludex #6). 차단은 고정밀 신호만 — 앵커(leading/trailing), always_block(무맥락 토큰), empty, is_error. 비앵커 키워드는 표시(flagged)만: '에러를 이야기하는 기억'을 파괴하지 않고, '에러 그 자체'는 앵커가 잡는다.",
+  "rules": [
+    {"id": "auth-billing", "where": "anywhere", "regex": "credit balance is too low", "always_block": true},
+    {"id": "context-residue", "where": "leading", "regex": "\\[older tool result cleared to save context\\]"},
+    {"id": "context-residue", "where": "anywhere", "regex": "\\[older tool result cleared to save context\\]"},
+    {"id": "error-fallback", "where": "leading", "regex": "\\[error:"},
+    {"id": "error-fallback", "where": "leading", "regex": "error:\\s"},
+    {"id": "error-fallback", "where": "leading", "regex": "\\[tool dispatch error:"},
+    {"id": "error-fallback", "where": "leading", "regex": "traceback \\(most recent call last\\)"},
+    {"id": "error-fallback", "where": "trailing", "regex": "\\[error:.*\\]\\s*$"},
+    {"id": "error-fallback", "where": "anywhere", "regex": "traceback \\(most recent call last\\)"},
+    {"id": "error-fallback", "where": "anywhere", "regex": "\\btimed out\\b"},
+    {"id": "error-fallback", "where": "anywhere", "regex": "has not been loaded yet"},
+    {"id": "error-fallback", "where": "anywhere", "regex": "\\betimedout\\b", "always_block": true},
+    {"id": "error-fallback", "where": "anywhere", "regex": "\\beconnrefused\\b", "always_block": true},
+    {"id": "error-fallback", "where": "anywhere", "regex": "reached maximum budget", "always_block": true}
+  ]
+}

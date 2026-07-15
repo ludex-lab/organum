@@ -1,0 +1,1 @@
+{"sequence": ["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""], "expected_streak_at": 5, "source": "2026-07-04 GATED-LIVE host-outage 실측", "note": "머신 슬립/네트워크 단절 — 모든 브레인 호출이 빈 응답 25턴. 각각은 turn-fail/empty로 blocked; window guard가 5연속에서 매치 전체 VOID. 성공 시 리셋 semantics 동일"}
