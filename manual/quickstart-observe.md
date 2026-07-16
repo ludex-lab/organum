@@ -1,20 +1,19 @@
-# 내 에이전트 지켜보기 — 5분 퀵스타트
+# 라이브 관측·역사 축적 — organum web · observatory (베타)
 
 *English version: [quickstart-observe.en.md](quickstart-observe.en.md)*
+*끝난 작업을 소급 계측하려면 → [quickstart-inspector.md](quickstart-inspector.md)(released 제품)*
 
-Claude Code로 일하다 보면 궁금해지는 순간이 와요. 지금 토큰을 얼마나 쓰고 있지?
-방금 서브에이전트가 몇 개나 떴지? 그건 무슨 모델로 돌았지? organum은 그 답을
-보여주는 관측 도구예요. 에이전트를 조종하거나 바꾸는 게 아니라, 이미 디스크에
-남는 세션 기록을 읽어서 한 화면으로 모아줄 뿐이에요.
+이 문서는 관측 스위트의 **베타** 조각 둘을 다뤄요: 지금 돌고 있는 세션을
+실시간으로 보는 **관제탑(`organum web`)**, 그리고 벤더가 기록을 지우기 전에
+역사를 쌓는 **`observatory`**. 둘 다 실제로 동작하지만 아직 다듬는 중이라,
+제품으로 먼저 나온 사후 계측(inspector)이 궁금하면 위 링크로 가세요.
 
-> pre-1.0입니다. 포맷이 아직 움직여요.
+> pre-1.0(베타)입니다. 포맷이 아직 움직여요.
 
 ## 설치
 
 ```bash
-git clone https://github.com/JihoonJeong/organum && cd organum
-python3 -m venv .venv && .venv/bin/pip install -e .
-# 아무 데서나 부르고 싶으면: alias organum=<클론 경로>/.venv/bin/organum
+pip install organum        # 또는: pipx install organum
 ```
 
 ## 1분 컷: 관제탑 띄우기

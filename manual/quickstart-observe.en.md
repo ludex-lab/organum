@@ -1,12 +1,15 @@
-# Watching your agent — a 5-minute quickstart
+# Live observation & history — organum web · observatory (beta)
 
-Sooner or later, working with Claude Code, the questions arrive. How many tokens
-am I burning right now? How many subagents just spawned — and on which model did
-they run? organum is an observation tool that answers them. It doesn't steer or
-modify your agent; it reads the session records already landing on disk and
-gathers them into one view.
+*한국어: [quickstart-observe.md](quickstart-observe.md)*
+*To meter finished work → [quickstart-inspector.en.md](quickstart-inspector.en.md) (the released product)*
 
-> pre-1.0 — the format is still moving.
+This doc covers the two **beta** pieces of the observation suite: the live
+**control tower (`organum web`)** for sessions running right now, and
+**`observatory`** for accumulating history before the vendor deletes it. Both
+run, but they're still being polished — if you want the product-grade post-hoc
+metering (inspector) instead, follow the link above.
+
+> pre-1.0 (beta) — the format is still moving.
 
 ## Install
 
