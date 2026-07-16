@@ -292,7 +292,7 @@ def cmd_distill(args: argparse.Namespace) -> int:
         model=args.model, max_budget_usd=args.max_budget_usd,
         override_streak=args.override_streak,
     )
-    print(f"distilled → {summary['path']} (cost {summary['cost_usd']})")
+    print(f"distilled → {summary['path']} (cost {summary['cost_usd']} · billing {summary.get('billing') or '?'})")
     return 0
 
 
@@ -504,8 +504,10 @@ def cmd_web(args: argparse.Namespace) -> int:
     from organum import web as web_mod
 
     cwd = Path.cwd()
-    state_dir = st.find_state_dir(cwd)  # 선택
-    return web_mod.serve(cwd, state_dir, port=args.port, host=args.host)
+    state_dir = st.find_state_dir(cwd)  # 선택 (하위 디렉터리면 부모 현장을 찾는다 → 서버가 root 고정)
+    return web_mod.serve(cwd, state_dir, port=args.port, host=args.host,
+                         idle_timeout_min=args.idle_timeout,
+                         allow_remote_write=args.allow_remote_write)
 
 
 def cmd_mcp(args: argparse.Namespace) -> int:
@@ -924,9 +926,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_liv.add_argument("--stop", action="store_true", help="실행 중인 세션 종료 (tmux 서버는 창 닫아도 남는다 — 이게 OFF 스위치)")
     p_liv.set_defaults(func=cmd_live)
 
-    p_web = sub.add_parser("web", help="관제탑 — localhost 웹으로 현장의 모든 세포 수렴 (read-only · tmux 불요 · 크로스-플랫폼)")
+    p_web = sub.add_parser("web", help="관제탑 — localhost 웹으로 현장의 모든 세포 수렴 (관측 read-only · 게시판 human-write · init 없인 관측만)")
     p_web.add_argument("--port", type=int, default=7332, help="포트 (기본 7332, 사용 중이면 다음 것 시도)")
     p_web.add_argument("--host", default="127.0.0.1", help="바인드 호스트 (기본 127.0.0.1 = localhost)")
+    p_web.add_argument("--idle-timeout", type=float, default=120,
+                       help="뷰어 요청이 이 분수만큼 없으면 자멸 (기본 120, 0=끄기 — 잊힌 서버 방지)")
+    p_web.add_argument("--allow-remote-write", action="store_true",
+                       help="비-loopback 바인드에서도 게시판 쓰기 허용 (기본 금지 — 원격은 관측만; 위험 승인)")
     p_web.set_defaults(func=cmd_web)
 
     p_insp2 = sub.add_parser("inspector", help="사후 계측 — 임의 폴더의 에이전트 세션 소급 집계 (read-only·init 불요; 라이브 tail은 'inspect')")

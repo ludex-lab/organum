@@ -55,7 +55,7 @@ def remember(
         guard.record(state_dir, verdict, "memories", content)
     with (state_dir / "memory" / "memories.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
-    st.append_event(
+    st.append_event(  # 이 remember 이벤트가 streak 리셋 경계다(events 삽입 순서, §7.2)
         state_dir, "remember", content if len(content) <= 80 else content[:79] + "…", tags=tags
     )
     return verdict, record["id"]

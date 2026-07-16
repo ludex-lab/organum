@@ -129,7 +129,7 @@ def apply(
     ]
 
     self_path.write_text(_render(title, head, sections, order), encoding="utf-8")
-    n_added = sum(len(v) for v in additions.values())
+    n_added = sum(len(v) for v in additions.values())  # reflect 이벤트가 streak 리셋 경계(§7.2)
     st.append_event(
         state_dir, "reflect",
         f"reflect: +{n_added} 항목 · resolve {len(resolved)} (trigger: {trig})",

@@ -32,7 +32,28 @@ KNOWN_ORGANS = {
     "memory": ["remember", "recall"],
     "map": ["map"],
     "worldmodel": ["distill"],
+    "relay": ["relay"],       # 조율 우체통 — 번들 coordination skill이 요구 (불변조건 ⑧)
+    "guard": ["checkup"],     # 저장 경계 규율 — 상태는 자동 집행, 표면은 checkup
 }
+
+
+def parse_organs(val: str) -> list[str]:
+    """organum-requires 값 파싱 — 공백 구분('relay guard')과 YAML 플로우 리스트
+    ('[relay, guard]') 둘 다 관용한다: 번들 스킬이 자기 세관을 통과 못 하던 원인."""
+    return [t for t in re.split(r"[\s,\[\]]+", val or "") if t]
+
+
+def resolve_required(meta: dict) -> list[str]:
+    """요구 조직을 **한 곳에서** 정규화 — audit와 실제 wiring이 같은 리스트를 소비한다
+    (critic 재감사 ⑧: audit는 parse_organs, provision은 .split()이라 갈렸던 원인).
+    관용 형태: 평탄('relay guard'), 플로우('[relay, guard]'), 중첩({organs:[...]}),
+    평탄화 잔재(metadata.organs)."""
+    req = meta.get("organum-requires")
+    if isinstance(req, dict):
+        req = req.get("organs") or ""
+    if not str(req or "").strip():
+        req = meta.get("organs") or ""
+    return parse_organs(str(req or ""))
 # 심층방어 exfil 스캔 (주 통제 아님 — injection은 못 잡는다, 위 docstring 참고)
 SUSPICIOUS = [
     (r"\bcurl\b|\bwget\b", "외부 네트워크 fetch"),
@@ -114,7 +135,7 @@ def audit_skill(skill_dir: Path, fm: dict, *, trust_override: bool, registry=Non
             f"provenance 주장 {claim!r} 자기선언·미검증 — 운영자 --trust 필요 "
             "(자기선언 ≠ 신뢰, 스푸핑 가능; 신뢰는 외부 크리처 레지스트리에서 온다)")
 
-    required = (meta.get("organum-requires") or "").split()
+    required = resolve_required(meta)
     if not required:
         a.refusals.append("organum-requires 선언 없음")
     for organ in required:
@@ -143,7 +164,7 @@ def provision(skill_dir: Path, workdir: Path, *, trust_override: bool = False, r
     fm = parse_frontmatter(skill_dir / "SKILL.md")
     name = fm.get("name", skill_dir.name)
     meta = fm.get("metadata") or {}
-    required = (meta.get("organum-requires") or "").split()
+    required = resolve_required(meta)  # audit와 동일 리졸버 — 감사·배선 리스트 일치(불변조건 ⑧)
 
     audit = audit_skill(skill_dir, fm, trust_override=trust_override, registry=registry)
 

@@ -35,6 +35,10 @@ works on the terminal you're using right now, or on a project that has never
 heard of organum. To watch a second project, launch another tower from that
 folder with `organum web --port 7333`.
 
+The tower also cleans up after itself: close the browser and, after two hours
+with no viewer, it quietly shuts down — no forgotten servers piling up. Keep it
+running forever with `--idle-timeout 0`.
+
 It's not just Claude Code, either — Codex, Gemini (Antigravity), Grok, and
 OpenCode sessions converge onto the same screen as the same kind of card.
 

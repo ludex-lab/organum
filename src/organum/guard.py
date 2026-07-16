@@ -136,10 +136,22 @@ def record(state_dir: Path, verdict: Verdict, target: str, content: str) -> None
     }
     with (state_dir / "guard.jsonl").open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    # streak는 events.jsonl 삽입 순서로 계산된다(§7.2, critic 재감사-2 ⑦: v0 호환+같은 초).
+    # blocked=실패, flagged=저장됨(경계). guard.jsonl은 frozen v0 §3.7 그대로 둔다.
     if verdict.decision == "blocked":
         st.append_event(
             state_dir, "guard_block", f"guard blocked ({verdict.rule}) → {target}: {verdict.reason}"
         )
+    elif verdict.decision == "flagged":
+        st.append_event(
+            state_dir, "guard_flagged", f"guard flagged ({verdict.rule}) → {target} (저장됨)"
+        )
+
+
+def record_delegation_failure(state_dir: Path, source: str, reason: str) -> None:
+    """위임 실패를 streak 로그(events.jsonl)에만 남긴다 — 저장 경계가 아니므로 guard.jsonl
+    (면역 로그, §3.7 target enum)에는 넣지 않는다. blocked 이벤트로 streak에 산입된다."""
+    st.append_event(state_dir, "guard_block", f"delegation failed ({source}): {reason}"[:EXCERPT_LIMIT])
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -156,19 +168,29 @@ def _read_jsonl(path: Path) -> list[dict]:
     return out
 
 
+# streak 경계 = 성공 저장(§_SUCCESS_KINDS) 또는 flagged(저장됨). guard_streak=알림용(미산입).
+_STREAK_RESET_KINDS = _SUCCESS_KINDS | {"guard_flagged"}
+
+
 def streak_count(state_dir: Path) -> int:
-    """마지막 성공 저장 이후 꼬리 연속 blocked 수 (§7.2). flagged = 저장됨 = 리셋."""
-    events = _read_jsonl(state_dir / "memory" / "events.jsonl")
-    last_success = max(
-        (e["ts"] for e in events if e.get("kind") in _SUCCESS_KINDS), default=""
-    )
+    """마지막 성공 저장 이후 꼬리 연속 위임/저장 실패 수 (§7.2). flagged = 저장됨 = 리셋.
+
+    **events.jsonl 삽입 순서만** 본다(timestamp 비교 없음 → 같은 초 뒤집힘 없음; frozen v0
+    호환 → guard.jsonl 스키마 불변, legacy 상태도 그대로 읽힌다 — critic 재감사-2 ⑦).
+    역순으로 걸으며 guard_block(실패)을 세다가 성공 경계를 만나면 멈춘다. STREAK 알림
+    (guard_streak)은 실제 실패가 아니므로 세지도 멈추지도 않는다."""
     count = 0
-    for rec in reversed(_read_jsonl(state_dir / "guard.jsonl")):
-        if rec.get("rule") == "streak":  # streak 마커 자신은 세지 않는다
-            continue
-        if rec.get("decision") != "blocked" or rec.get("ts", "") <= last_success:
+    for rec in reversed(_read_jsonl(state_dir / "memory" / "events.jsonl")):
+        kind = rec.get("kind")
+        if kind == "guard_block":
+            # legacy 0.1.2가 STREAK 알림도 guard_block으로 남겼다 — 실패가 아니므로 건너뛴다
+            # (critic 재감사-3 ②: legacy 상태를 정확히 읽는다). 현행 알림은 guard_streak.
+            if str(rec.get("content") or "").startswith("STREAK:"):
+                continue
+            count += 1
+        elif kind in _STREAK_RESET_KINDS:
             break
-        count += 1
+        # 그 외(note·guard_streak 등)는 실패도 경계도 아님 → 건너뜀
     return count
 
 
@@ -176,18 +198,30 @@ def streak_active(state_dir: Path, n: int = STREAK_N) -> bool:
     return streak_count(state_dir) >= n
 
 
+def _streak_already_notified(state_dir: Path) -> bool:
+    """이번 streak 구간(마지막 리셋 경계 이후)에 이미 알림을 냈나 — 반복 알림 방지.
+    현행 guard_streak + legacy 0.1.2 알림(guard_block/content='STREAK:') 둘 다 인식
+    (critic 재감사-4 비차단 후속: legacy 활성 streak 업그레이드 시 중복 알림 방지)."""
+    for rec in reversed(_read_jsonl(state_dir / "memory" / "events.jsonl")):
+        kind = rec.get("kind")
+        if kind == "guard_streak":
+            return True
+        if kind == "guard_block" and str(rec.get("content") or "").startswith("STREAK:"):
+            return True                          # legacy 알림도 '이미 알림함'으로 인정
+        if kind in _STREAK_RESET_KINDS:
+            break
+    return False
+
+
 def mark_streak_if_reached(state_dir: Path, n: int = STREAK_N) -> bool:
-    """blocked 기록 직후 호출 — streak 도달 시 마커 기록 + True. 조용한 연쇄 실패 금지."""
-    if streak_count(state_dir) != n:  # 정확히 도달한 순간만 마커 (반복 마커 방지)
-        return streak_count(state_dir) > n
-    rec = {
-        "ts": st.utc_now_iso(),
-        "decision": "blocked",
-        "rule": "streak",
-        "target": "delegation",
-        "excerpt": f"연속 blocked {n}회 — 호스트 outage 가능성. distill/reflect는 --override 필요.",
-    }
-    with (state_dir / "guard.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    st.append_event(state_dir, "guard_block", f"STREAK: 연속 {n}회 저장 차단 — window guard 발동")
+    """저장/위임 실패 기록 직후 호출 — streak 도달 시 알림 이벤트 + True. 조용한 연쇄 실패 금지.
+
+    알림은 events.jsonl의 guard_streak 하나로 일원화(guard.jsonl 마커 폐지 — 그 마커의
+    target='delegation'이 frozen v0 §3.7 enum 위반이었다, critic 재감사-3 ①). guard.jsonl은
+    이제 저장 경계 결정(blocked|flagged)만 담는다."""
+    if streak_count(state_dir) < n:
+        return False
+    if not _streak_already_notified(state_dir):  # 이번 구간 1회만
+        st.append_event(state_dir, "guard_streak",
+                        f"STREAK: 연속 {n}회 저장/위임 차단 — window guard 발동")
     return True

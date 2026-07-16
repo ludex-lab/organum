@@ -7,7 +7,8 @@ CLI(claude 등)를 호출하는 얇은 층이다. 검증된 레시피: docs/spik
 1. streak 게이트 — guard streak 활성 시 위임 거부 (호스트 outage 중 쿼타 소모 방지, §7.2)
 2. is_error 선분기 — budget abort는 result 키 자체가 없다. .result 접근 전 is_error 확인
 3. 예산 캡 — --max-budget-usd 하드 핀 (콜드캐시 기준: spike-recheck §3)
-4. auth 격리 — organum은 ANTHROPIC_API_KEY를 주입하지 않는다 (과금 경로 변경 사고 방지);
+4. auth 경로 보존 — organum은 ANTHROPIC_API_KEY를 주입하지 않는다 (과금 경로 변경 사고 방지;
+   '격리'가 아니다 — 사용자 env는 그대로 전달되고, organum은 자격·예산·실행권을 *빌릴* 뿐이다);
    과금 tier를 결과에 노출해 조용한 metered 전환을 막는다 (기관 1-5).
 """
 
@@ -16,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -49,7 +51,7 @@ def billing_tier(env: dict | None = None) -> str:
 
 
 def _subprocess_env() -> dict:
-    """auth 격리: 사용자 환경을 그대로 전달하되 organum이 자격/과금 변수를 주입하지 않는다.
+    """auth 경로 보존(격리 아님): 사용자 환경을 그대로 전달하되 자격/과금 변수를 주입하지 않는다.
 
     --bare를 쓰지 않으므로 사용자의 OAuth/구독 경로가 그대로 유지된다 (spike gotcha 3).
     """
@@ -132,20 +134,36 @@ def delegate(
             "호스트/설정 점검 전 위임 거부. override_streak로 강제."
         )
     budget = max(max_budget_usd, MIN_BUDGET_USD)
+    if budget != max_budget_usd:  # 조용한 바닥은 표시 정직성 위반(불변조건 ⑥) — 올리더라도 시끄럽게
+        print(f"organum delegate: 예산 ${max_budget_usd:g} < 최소 ${MIN_BUDGET_USD:g} — "
+              f"${budget:g}로 상향 (콜드캐시 1회 호출 보호선, spike-recheck §3)", file=sys.stderr)
     cmd = build_cmd(
         cli, budget, model=model, system_prompt=system_prompt, allowed_tools=allowed_tools
     )
     billing = billing_tier()
+
+    def _fail(res: DelegationResult) -> DelegationResult:
+        # 불변조건 ⑦: 실제 delegation 실패가 guard streak까지 이어져야 반복 실패가
+        # (timeout·budget·CLI 부재) 조용히 연쇄하지 않는다 — 성공 저장(distill 등)이 리셋.
+        # events.jsonl에만 남긴다(위임 실패는 저장 경계가 아니라 guard.jsonl §3.7 대상 아님).
+        if state_dir is not None:
+            guard.record_delegation_failure(
+                state_dir, f"{cli}", f"{res.subtype or 'error'}: {res.error or ''}")
+            guard.mark_streak_if_reached(state_dir)
+        return res
+
     try:
         proc = subprocess.run(
             cmd, input=prompt.encode("utf-8"),
             capture_output=True, timeout=timeout, env=_subprocess_env(),
         )
     except FileNotFoundError:
-        return DelegationResult(ok=False, error=f"CLI '{cli}' 없음 — cli 인자로 지정하세요.", billing=billing)
+        return _fail(DelegationResult(ok=False, error=f"CLI '{cli}' 없음 — cli 인자로 지정하세요.",
+                                      subtype="cli-missing", billing=billing))
     except subprocess.TimeoutExpired:
-        return DelegationResult(ok=False, error=f"위임 타임아웃 ({timeout}s)", subtype="timeout", billing=billing)
+        return _fail(DelegationResult(ok=False, error=f"위임 타임아웃 ({timeout}s)",
+                                      subtype="timeout", billing=billing))
 
     result = parse_result(proc.stdout.decode("utf-8", "replace"), proc.returncode)
     result.billing = billing
-    return result
+    return result if result.ok else _fail(result)

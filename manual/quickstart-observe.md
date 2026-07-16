@@ -37,6 +37,9 @@ organum web        # → http://localhost:7332
 다른 프로젝트를 하나 더 보고 싶으면 그 폴더에서 `organum web --port 7333`처럼
 포트만 바꿔 하나 더 띄우세요.
 
+관제탑은 브라우저를 닫고 2시간 동안 아무도 안 보면 스스로 종료돼요 — 잊힌
+서버가 쌓이지 않게요. 계속 켜두려면 `--idle-timeout 0`.
+
 Claude Code만 되는 것도 아니에요 — Codex, Gemini(Antigravity), Grok, OpenCode
 세션도 같은 화면에 같은 카드로 수렴돼요.
 

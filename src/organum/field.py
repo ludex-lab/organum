@@ -26,6 +26,13 @@ def slug(s: str, default: str = "msg") -> str:
     return s or default
 
 
+def _fm_safe(s: str) -> str:
+    """frontmatter 값 새니타이즈 — 직렬화 경계와 파서(splitlines)의 '줄 정의'를 맞춘다.
+    \\r\\n뿐 아니라 splitlines가 줄로 보는 모든 유니코드/제어 구분자(LS·PS·NEL·VT·FF·RS…)를
+    합쳐야 메타데이터 주입이 막힌다(critic 재감사 ②: parse_msg가 splitlines를 쓴다)."""
+    return " ".join(str(s).splitlines()).strip()
+
+
 def parse_msg(text: str) -> tuple[dict, str]:
     meta, body = {}, text
     if text.startswith("---"):
@@ -63,19 +70,20 @@ def post(cwd: Path, field: str, body: str, frm: str = "cell", to: str = "all", t
     body = (body or "").strip()
     if not body:
         return None
-    frm = str(frm).strip()[:40]
-    to = str(to).strip()[:80]
-    topic = str(topic).strip()[:80]
-    thread = str(thread).strip()[:120]
-    reply_to = str(reply_to).strip()[:120]
+    frm = _fm_safe(frm)[:40]
+    to = _fm_safe(to)[:80]
+    topic = _fm_safe(topic)[:80]
+    src = _fm_safe(src)[:40]
+    thread = _fm_safe(thread)[:120]
+    reply_to = _fm_safe(reply_to)[:120]
     if reply_to and not thread:
         pm = get_meta(cwd, field, reply_to)
         thread = ((pm.get("thread") if pm else "") or "").strip() or reply_to
     d = field_dir(cwd, field)
     d.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    fname = (f"{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
-             f"-{slug(frm, 'cell')}-to-{slug(to, 'all')}-{slug(topic)}.md")
+    stem = (f"{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}"
+            f"-{slug(frm, 'cell')}-to-{slug(to, 'all')}-{slug(topic)}")
     fm = f"---\nfrom: {frm}\nto: {to}\nts: {ts}\ntopic: {topic}\nsrc: {src}\n"
     if escalate:
         fm += "escalate: true\n"
@@ -83,8 +91,17 @@ def post(cwd: Path, field: str, body: str, frm: str = "cell", to: str = "all", t
         fm += f"thread: {thread}\n"
     if reply_to:
         fm += f"in_reply_to: {reply_to}\n"
-    (d / fname).write_text(fm + f"---\n{body}\n", encoding="utf-8")
-    return fname
+    # append-only 계약(불변조건 ①): 편지 한 건은 절대 다른 편지를 덮어쓰지 않는다 —
+    # 같은 초·같은 조합이면 -2, -3… 유일 접미. O_EXCL("x")이 경쟁 세포 간 원자성 보증.
+    for i in range(1, 1000):
+        fname = f"{stem}.md" if i == 1 else f"{stem}-{i}.md"
+        try:
+            with open(d / fname, "x", encoding="utf-8") as f:
+                f.write(fm + f"---\n{body}\n")
+            return fname
+        except FileExistsError:
+            continue
+    return None
 
 
 def list_all(cwd: Path, field: str, limit: int = 60) -> list:

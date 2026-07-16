@@ -88,7 +88,7 @@ class TestStreak(unittest.TestCase):
                 v = guard.evaluate("[Error: CLI timed out]")
                 guard.record(state, v, "memories", "[Error: CLI timed out]")
             self.assertEqual(guard.streak_count(state), 4)
-            st.append_event(state, "remember", "정상 저장")  # 성공 → 리셋
+            st.append_event(state, "remember", "정상 저장")  # 성공 이벤트 = 경계 → 리셋 (§7.2)
             self.assertEqual(guard.streak_count(state), 0)
 
     def test_flagged_resets_streak(self):
@@ -102,20 +102,21 @@ class TestStreak(unittest.TestCase):
     def test_streak_marker_not_counted_and_not_repeated(self):
         with tempfile.TemporaryDirectory() as td:
             state = _make_state_dir(Path(td))
+
+            def streak_events():
+                return [r for r in guard._read_jsonl(state / "memory" / "events.jsonl")
+                        if r.get("kind") == "guard_streak"]
             for _ in range(guard.STREAK_N):
                 guard.record(state, guard.Verdict("blocked", "error-fallback"), "memories", "x")
             self.assertTrue(guard.mark_streak_if_reached(state))
-            markers = [
-                r for r in guard._read_jsonl(state / "guard.jsonl") if r.get("rule") == "streak"
-            ]
-            self.assertEqual(len(markers), 1)
-            # 6번째 blocked — 마커는 반복 기록되지 않되 streak는 유지
+            self.assertEqual(len(streak_events()), 1)              # 알림 1회
+            # guard.jsonl에는 v0 위반 마커(target=delegation)가 없어야 한다
+            self.assertFalse(any(r.get("rule") == "streak"
+                                 for r in guard._read_jsonl(state / "guard.jsonl")))
+            # 6번째 blocked — 알림은 반복되지 않되 streak는 유지
             guard.record(state, guard.Verdict("blocked", "error-fallback"), "memories", "x")
             self.assertTrue(guard.mark_streak_if_reached(state))
-            markers = [
-                r for r in guard._read_jsonl(state / "guard.jsonl") if r.get("rule") == "streak"
-            ]
-            self.assertEqual(len(markers), 1)
+            self.assertEqual(len(streak_events()), 1)              # 여전히 1회
 
 
 class TestLudexExchange(unittest.TestCase):

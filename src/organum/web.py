@@ -1,4 +1,4 @@
-"""organum web — 관제탑 (localhost 공유-인지 뷰, stdlib only, read-only).
+"""organum web — 관제탑 (localhost 공유-인지 뷰, stdlib only, 관측 read-only · 게시판 human-write).
 
 경계: **관제탑이지 관제사가 아니다** — 모든 세포를 *보여준다*(pull, read-only). 조종·디스패치 없음.
 데이터: `find_all_transcripts` + `Vitals` (inspect.py 재사용). 웹 v1 = 관찰 수렴을 tmux 없이 브라우저로
@@ -409,11 +409,45 @@ applyI18n();
 </body></html>"""
 
 
+# 읽기/쓰기 권한의 *의미*는 세 표면(서버 배너·CLI 도움말·문서)에서 일치해야 한다(불변조건 ⑤).
+# 서버 배너는 이 상수를 소비하고, CLI/문서는 같은 문구를 담는다 — 테스트가 그 의미 일치를 강제.
+ROLE_LABEL = "관측 read-only · 게시판 human-write"
+MAX_POST_BYTES = 1_000_000  # 게시판 본문 상한 — localhost 도구지만 무한 수신은 계약이 아니다
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
 class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):  # 조용히
         pass
 
+    def _post_allowed(self) -> tuple[bool, int, str, int]:
+        """게시판 쓰기 전 게이트(불변조건 ④⑤). 반환 (ok, http코드, 사유, 검증된_본문길이):
+        ① 초기화된 현장에서만(반쪽 .organum 금지) ② 원격 바인드 쓰기 거부(Origin은 CSRF 완화일 뿐
+        접근통제가 아님 — 비-loopback 바인드면 쓰기 자체를 차단) ③ Content-Length 0..상한 1회 검증
+        (음수 우회 금지, read에 재사용) ④ Origin은 URL 파싱한 hostname을 정확 loopback allowlist와 비교
+        (substring 'localhost.evil.example' 우회 금지)."""
+        from urllib.parse import urlsplit
+        sd = self.server.state_dir
+        if sd is None or not (sd / "meta.json").is_file():
+            return False, 400, "organum init 필요 — 게시판 쓰기는 초기화된 현장에서만 (관측은 init 불요)", 0
+        if self.server.bind_host not in _LOOPBACK and not self.server.allow_remote_write:
+            return False, 403, ("원격 바인드에서 게시판 쓰기 거부 — 관측은 read-only로 노출되지만 "
+                                "쓰기는 로컬 전용. 명시적 위험 승인은 --allow-remote-write."), 0
+        try:
+            n = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            return False, 400, "잘못된 Content-Length", 0
+        if n < 0 or n > MAX_POST_BYTES:
+            return False, 413, f"본문 길이 {n}이 허용 범위(0..{MAX_POST_BYTES}) 밖", 0
+        origin = self.headers.get("Origin")
+        if origin:
+            host = urlsplit(origin).hostname or ""
+            if host not in _LOOPBACK:
+                return False, 403, "교차 출처 게시 거부 (관제탑 게시판은 로컬 브라우저에서만)", 0
+        return True, 200, "", n
+
     def _send(self, code: int, ctype: str, body: bytes) -> None:
+        self.server.last_request = time.time()  # 뷰어 감지 — 브라우저가 열려 있으면 폴링이 계속 온다
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -444,8 +478,12 @@ class _Handler(BaseHTTPRequestHandler):
         if not (self.path.startswith("/relay") or self.path.startswith("/alarm")):
             self._send(404, "text/plain; charset=utf-8", b"not found")
             return
-        try:
-            n = int(self.headers.get("Content-Length", 0) or 0)
+        ok, code, why, n = self._post_allowed()
+        if not ok:
+            self._send(code, "application/json; charset=utf-8",
+                       json.dumps({"ok": False, "error": why}, ensure_ascii=False).encode("utf-8"))
+            return
+        try:  # 길이는 게이트가 검증한 n만 사용 (음수/초과 우회 차단, 불변조건 ⑤)
             data = json.loads(self.rfile.read(n).decode("utf-8")) if n else {}
         except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
             data = {}
@@ -482,17 +520,46 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class _Server(HTTPServer):
-    def __init__(self, addr, cwd: Path, state_dir: Path | None):
+    def __init__(self, addr, cwd: Path, state_dir: Path | None,
+                 allow_remote_write: bool = False):
         super().__init__(addr, _Handler)
-        self.cwd = cwd
+        # stateful root를 state_dir.parent로 고정(불변조건 ④): 하위 디렉터리에서 web을 띄워도
+        # 게시판 쓰기가 자식 cwd에 반쪽 .organum을 만들지 않고 부모 현장에 닿는다.
+        self.cwd = state_dir.parent if state_dir is not None else cwd
         self.state_dir = state_dir
+        self.bind_host = addr[0]
+        self.allow_remote_write = allow_remote_write
+        self.last_request = time.time()
 
 
-def serve(cwd: Path, state_dir: Path | None, port: int = 7332, host: str = "127.0.0.1") -> int:
+def _reap_when_idle(httpd, idle_min: float, tick_s: float = 30.0):
+    """idle 자멸(relay watch와 같은 규율) — 뷰어 요청이 idle_min분 없으면 스스로 종료.
+
+    신호는 '셀 활동'이 아니라 '뷰어 존재': 열린 브라우저는 몇 초마다 폴링하므로
+    마지막 HTTP 요청 시각이 관전자 감지기다. 아무도 안 보는 관제탑은 관측 기록도
+    돌지 않는(기록은 요청이 와야 돈다) 잊힌 프로세스 — 조용히 자리를 비켜준다."""
+    import threading
+
+    def loop():
+        while True:
+            time.sleep(tick_s)
+            idle = time.time() - httpd.last_request
+            if idle >= idle_min * 60:
+                print(f"\norganum web: idle 자멸 — {idle_min:g}분간 뷰어 요청 없음. "
+                      f"(다시 보려면: organum web · 끄려면: --idle-timeout 0)")
+                httpd.shutdown()
+                return
+    t = threading.Thread(target=loop, daemon=True)
+    t.start()
+    return t
+
+
+def serve(cwd: Path, state_dir: Path | None, port: int = 7332, host: str = "127.0.0.1",
+          idle_timeout_min: float = 120.0, allow_remote_write: bool = False) -> int:
     httpd = None
     for p in range(port, port + 10):  # 포트 사용 중이면 다음 것 시도
         try:
-            httpd = _Server((host, p), cwd, state_dir)
+            httpd = _Server((host, p), cwd, state_dir, allow_remote_write=allow_remote_write)
             port = p
             break
         except OSError:
@@ -500,8 +567,11 @@ def serve(cwd: Path, state_dir: Path | None, port: int = 7332, host: str = "127.
     if httpd is None:
         print(f"organum web: {port}~{port + 9} 포트가 모두 사용 중 — --port로 지정하세요.")
         return 1
-    print(f"organum web — 관제탑 (read-only) · {cwd.name}")
+    print(f"organum web — 관제탑 ({ROLE_LABEL}) · {cwd.name}")
     print(f"  → http://{host}:{port}/    (Ctrl-C 종료)")
+    if idle_timeout_min > 0:
+        print(f"  idle 자멸: 뷰어 없음 {idle_timeout_min:g}분 후 (조절: --idle-timeout, 0=끄기)")
+        _reap_when_idle(httpd, idle_timeout_min)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

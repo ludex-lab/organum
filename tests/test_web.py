@@ -97,6 +97,38 @@ class TestWebPayload(unittest.TestCase):
         self.assertEqual(sub["parent"], "aaaa1111")
         self.assertEqual(d["aggregate"]["out"], 432)  # 서브에이전트 토큰이 집계에 포함
 
+    def test_idle_reaper_fires_only_after_timeout(self):
+        # idle 자멸 — 신호는 뷰어(마지막 HTTP 요청), 셀 활동이 아님
+        import threading
+        import time as _time
+
+        class Fake:
+            def __init__(self):
+                self.last_request = _time.time()
+                self.down = threading.Event()
+            def shutdown(self):
+                self.down.set()
+
+        f = Fake()
+        web._reap_when_idle(f, idle_min=0.002, tick_s=0.02)   # ≈0.12초 타임아웃
+        f.last_request = _time.time()                          # 방금 뷰어 요청
+        _time.sleep(0.05)
+        self.assertFalse(f.down.is_set())                      # 아직 안 죽음
+        f.last_request = _time.time() - 60                     # 뷰어가 떠난 지 오래
+        self.assertTrue(f.down.wait(timeout=2))                # 자멸
+
+    def test_real_server_reaps_and_serve_returns(self):
+        import threading
+        with __import__("tempfile").TemporaryDirectory() as td:
+            httpd = web._Server(("127.0.0.1", 0), Path(td), None)
+            httpd.last_request = 0                             # 태초부터 뷰어 없음
+            web._reap_when_idle(httpd, idle_min=0.001, tick_s=0.02)
+            t = threading.Thread(target=httpd.serve_forever, daemon=True)
+            t.start()
+            t.join(timeout=3)
+            self.assertFalse(t.is_alive())                     # shutdown으로 반환됨
+            httpd.server_close()
+
     def test_stale_cell_excluded(self):
         old = "2000-01-01T00:00:00Z"
         fake = [adapters._cell("codex", "old00000", model="x", last_ts=old)]
