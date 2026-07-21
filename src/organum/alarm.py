@@ -40,15 +40,16 @@ def can_sound(state_dir: Path, frm: str) -> bool:
 
 
 def sound(cwd: Path, state_dir: Path, body: str, frm: str, to: str = "all",
-          level: str = "notice", src: str = "alarm-cli") -> str | None:
+          level: str = "notice", src: str = "alarm-cli", from_id: str = "") -> str | None:
     """경보 발동 — human/chief만. level: notice(주의) · pause(정지 권고). 빈 본문이면 None.
 
-    level은 엔벨로프 topic 자리에 실린다(substrate 무변경 — alarm 정책의 규약)."""
+    level은 엔벨로프 topic 자리에 실린다(substrate 무변경 — alarm 정책의 규약).
+    from_id = canonical sender identity(발동자가 셀이면; human이면 빈 문자열)."""
     if level not in LEVELS:
         raise AlarmError(f"level은 {'/'.join(LEVELS)} 중 하나 — '{level}'은 없습니다.")
     if not can_sound(state_dir, frm):
         raise AlarmError(f"'{frm}'은 경보를 발동할 수 없습니다 — human 또는 chief(열린 세션)만.")
-    return _f.post(cwd, FIELD, body, frm=frm, to=to, topic=level, src=src)
+    return _f.post(cwd, FIELD, body, frm=frm, to=to, topic=level, src=src, from_id=from_id)
 
 
 def active(cwd: Path, for_id: str | None = None) -> list:

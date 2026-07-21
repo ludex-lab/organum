@@ -23,15 +23,58 @@ def agora_dir(cwd: Path) -> Path:
 
 
 def post(cwd: Path, body: str, frm: str = "cell", topic: str = "", src: str = "agora-cli",
-         thread: str = "", reply_to: str = "", escalate: bool = False) -> str | None:
+         thread: str = "", reply_to: str = "", escalate: bool = False, from_id: str = "",
+         idem_key: str = "") -> str | None:
     """토론장 게시(개방). to는 항상 `field`(주소지정 안 함) — 모두가 읽는다.
-    escalate=True = human 개입 요청 — 관제탑 에스컬레이션 패널에 뜬다."""
-    return _f.post(cwd, FIELD, body, frm=frm, to="field", topic=topic, src=src,
-                   thread=thread, reply_to=reply_to, escalate=escalate)
+    escalate=True = human 개입 요청 — 관제탑 에스컬레이션 패널에 뜬다.
+    from_id = canonical sender identity(display frm과 분리 — 자기제외 판정용).
+    idem_key = 멱등 토큰(재전송 dedup)."""
+    return _f.post(cwd, FIELD, body, frm=frm, to="field", topic=topic, src=src, from_id=from_id,
+                   thread=thread, reply_to=reply_to, escalate=escalate, idem_key=idem_key)
 
 
 def list_all(cwd: Path, limit: int = 60) -> list:
     return _f.list_all(cwd, FIELD, limit=limit)
+
+
+GOAL_TOPIC = "goal"
+
+
+def latest_goal(cwd: Path, topic: str = GOAL_TOPIC) -> dict | None:
+    """현재 canonical goal — agora의 `topic:goal` 글 중 **최신 한 건**(전체 envelope) 또는 None.
+    **cursor/join과 무관**(전체 agora 스캔) — 늦게 join한 셀도 pre-existing goal을 복구한다(R2).
+    일반 post는 goal을 교체 안 함(topic 필터). 최신 = `(ts, file)` 최대(동률도 파일명 tie-break로
+    deterministic). frontmatter만 훑어 최신 goal 파일을 고른 뒤 그 한 건만 본문까지 읽는다."""
+    d = _f.field_dir(cwd, FIELD)
+    if not d.is_dir():
+        return None
+    topic = topic.strip().lower()
+    best_key = best_file = None
+    for p in d.glob("*.md"):
+        meta = _f.get_meta(cwd, FIELD, p.name)
+        if not meta or (meta.get("topic") or "").strip().lower() != topic:
+            continue
+        # 최신순 = (ts, mtime, file). ts=초-granularity라 같은 초 갱신은 mtime(sub-second, 생성순)으로
+        # tie-break — 파일명만 쓰면 '-2.md'<'.md'(0x2d<0x2e)라 최신을 못 고른다(hub와 같은 함정).
+        try:
+            key = (meta.get("ts") or "", p.stat().st_mtime, p.name)
+        except OSError:
+            continue
+        if best_key is None or key > best_key:
+            best_key, best_file = key, p.name
+    if best_file is None:
+        return None
+    try:
+        meta, body = _f.parse_msg((d / best_file).read_text(encoding="utf-8"))
+    except OSError:
+        return None
+    return {
+        "file": best_file, "from": meta.get("from", "?"), "from_id": meta.get("from_id", ""),
+        "to": meta.get("to", "field"), "topic": meta.get("topic", ""), "ts": meta.get("ts", ""),
+        "thread": meta.get("thread", ""), "in_reply_to": meta.get("in_reply_to", ""),
+        "escalate": (meta.get("escalate", "").lower() == "true"),
+        "body": body.strip()[:4000],
+    }
 
 
 def archive(cwd: Path, filename: str) -> bool:
@@ -42,8 +85,8 @@ def mark_read(cwd: Path, for_id: str, filename: str) -> None:
     return _f.mark_read(cwd, FIELD, for_id, filename)
 
 
-def mark_join(cwd: Path, for_id: str) -> str:
-    return _f.mark_join(cwd, FIELD, for_id)
+def mark_join(cwd: Path, for_id: str, reset: bool = False) -> str:
+    return _f.mark_join(cwd, FIELD, for_id, reset=reset)
 
 
 def read(cwd: Path, for_id: str, include_read: bool = False) -> list:

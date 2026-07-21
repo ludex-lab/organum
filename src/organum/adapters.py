@@ -449,6 +449,56 @@ def _ms_to_iso(ms) -> str | None:
         return None
 
 
+_OC_ROOT_DOMAIN = b"organum-code/opencode-root/v1"
+
+
+def opencode_cell_identity(root_session_id: str | None) -> str | None:
+    """OpenCode root 세션 id → canonical organum cell id (organum-code identity 계약 v1).
+
+    `oc-` + sha256(domain · NUL · root)[:36]. 하네스(organum-code `src/organum-identity.ts`
+    `deriveCellIdentity`)와 **바이트 동일** 파생이라, 관측 어댑터가 raw `ses_` 세션을 하네스가
+    join에 쓴 canonical cell로 귀속할 수 있다(two-lens·observatory가 exact-key로 조인). domain
+    separator 없이는 재현 불가 — 그게 measurement replay에서 두-렌즈가 갈린 원인이었다.
+    root가 비면 None(fail-closed = 미귀속 유지, 가짜 id 안 만듦)."""
+    if not root_session_id:
+        return None
+    import hashlib
+    digest = hashlib.sha256(_OC_ROOT_DOMAIN + b"\x00" + root_session_id.encode("utf-8")).hexdigest()
+    return "oc-" + digest[:36]
+
+
+def _opencode_root(conn, sid: str, directory: str, max_depth: int = 64) -> str | None:
+    """parent_id 체인을 **같은 directory 안에서** 따라 root 세션 id를 구한다 (organum-code
+    `resolveRootSession` 계약 포팅: directory-scoped·maxDepth 64). root = parent_id IS NULL인
+    세션. cycle·depth 초과·missing lookup·contract 위반(id 불일치·빈/비-str parent)은 전부
+    **None(fail-closed)** — 호출자는 raw id로 degrade해 정직하게 미귀속으로 남긴다."""
+    if not sid or not directory:
+        return None
+    seen: set[str] = set()
+    current = sid
+    for _ in range(max_depth):
+        if current in seen:                     # cycle
+            return None
+        seen.add(current)
+        try:
+            row = conn.execute(
+                "SELECT id, parent_id FROM session WHERE id=? AND directory=?",
+                (current, directory)).fetchone()
+        except sqlite3.Error:
+            return None
+        if row is None:                         # missing / lookup 실패
+            return None
+        if row["id"] != current:                # contract: 다른 id 반환
+            return None
+        parent = row["parent_id"]
+        if parent is None:                      # parentID 부재 → root 도달
+            return current
+        if not isinstance(parent, str) or not parent:  # contract: 빈/비-str parent
+            return None
+        current = parent
+    return None                                 # depth 초과
+
+
 class OpenCodeAdapter(Adapter):
     """OpenCode (sst/opencode) — provider-agnostic 터미널 에이전트. OpenAI-호환이라 **API 모델
     (SolarOpen2 등)을 세포로 만드는 어답트 대상**이고, 한 하네스가 여러 모델을 태우므로
@@ -493,6 +543,8 @@ class OpenCodeAdapter(Adapter):
                 conn.close()
                 return None
             parts = conn.execute("SELECT data FROM part WHERE session_id=?", (sid,)).fetchall()
+            directory = row["directory"] if "directory" in row.keys() else ""
+            root = _opencode_root(conn, sid, directory or "")
             conn.close()
         except sqlite3.Error:
             return None
@@ -517,7 +569,10 @@ class OpenCodeAdapter(Adapter):
                     v = inp.get(k)
                     if isinstance(v, str) and v.startswith("/"):
                         files.add(v)
-        return _cell("opencode", sid, path=str(self.root / "opencode.db"), model=model,
+        # id = root에서 파생한 canonical cell(하네스 계약) → declared presence·ledger와 exact-key
+        # 조인. root 미해석(broken chain 등)이면 raw sid[:8]로 fail-closed(정직한 미귀속).
+        return _cell("opencode", sid, id=(opencode_cell_identity(root) or (sid or "?")[:8]),
+                     path=str(self.root / "opencode.db"), model=model,
                      origin=("subagent" if d.get("parent_id") else "terminal"),
                      parent=(d.get("parent_id") or "")[:8] or None,
                      in_tok=d.get("tokens_input"), out_tok=d.get("tokens_output"),

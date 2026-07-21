@@ -394,6 +394,67 @@ class TestOpenCodeAdapter(unittest.TestCase):
             _opencode_db(root, cwd="/want", sid="ses_arch", archived=True)
             self.assertEqual(adapters.OpenCodeAdapter(root=root).discover("/want", window_min=60), [])
 
+    # --- canonical cell identity (organum-code harness 계약, measurement replay seam 수리) ---
+
+    def test_cell_identity_byte_identical_to_harness(self):
+        # organum-code src/organum-identity.ts deriveCellIdentity와 바이트 동일해야 두-렌즈 조인.
+        # 정본 벡터: measurement replay의 실제 root 세션 → canonical cell.
+        self.assertEqual(
+            adapters.opencode_cell_identity("ses_07d5c1b12ffe35QOEaxfAxEr4s"),
+            "oc-7efc0fcdb45c9e32208f096b892efb9d8fc0")
+        self.assertIsNone(adapters.opencode_cell_identity(""))
+        self.assertIsNone(adapters.opencode_cell_identity(None))
+
+    def test_read_keys_root_session_by_canonical_identity(self):
+        # parent 없는 root 세션 → cell id = 파생 canonical, session_id = raw 보존.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _opencode_db(root, cwd="/repo", sid="ses_07d5c1b12ffe35QOEaxfAxEr4s")
+            c = adapters.OpenCodeAdapter(root=root).read("ses_07d5c1b12ffe35QOEaxfAxEr4s")
+            self.assertEqual(c["id"], "oc-7efc0fcdb45c9e32208f096b892efb9d8fc0")
+            self.assertEqual(c["session_id"], "ses_07d5c1b12ffe35QOEaxfAxEr4s")
+
+    def test_child_collapses_to_root_canonical_identity(self):
+        # root + child 세션(같은 directory) → 둘 다 같은 canonical cell로 귀속(하나의 유기체).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _opencode_db(root, cwd="/repo", sid="ses_rootaaaaaaaaaaaaaaaaaaaaaa")
+            _opencode_db(root, cwd="/repo", sid="ses_childbbbbbbbbbbbbbbbbbbbbb",
+                         parent="ses_rootaaaaaaaaaaaaaaaaaaaaaa")
+            ad = adapters.OpenCodeAdapter(root=root)
+            root_id = ad.read("ses_rootaaaaaaaaaaaaaaaaaaaaaa")["id"]
+            child_id = ad.read("ses_childbbbbbbbbbbbbbbbbbbbbb")["id"]
+            self.assertEqual(root_id, adapters.opencode_cell_identity("ses_rootaaaaaaaaaaaaaaaaaaaaaa"))
+            self.assertEqual(child_id, root_id)   # 같은 root → 같은 canonical cell
+
+    def test_broken_chain_fails_closed_to_raw(self):
+        # parent가 관측 DB에 없음 → root 미해석 → raw sid[:8]로 fail-closed(정직한 미귀속, oc- 아님).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _opencode_db(root, cwd="/repo", sid="ses_orphanxxxxxxxx", parent="ses_missing")
+            c = adapters.OpenCodeAdapter(root=root).read("ses_orphanxxxxxxxx")
+            self.assertEqual(c["id"], "ses_orph")            # sid[:8], 파생 안 함
+            self.assertFalse(c["id"].startswith("oc-"))
+
+    def test_parent_cycle_fails_closed(self):
+        # 순환(a→b→a) → fail-closed → raw id.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _opencode_db(root, cwd="/repo", sid="ses_cyaaaaaaaaaa", parent="ses_cybbbbbbbbbb")
+            _opencode_db(root, cwd="/repo", sid="ses_cybbbbbbbbbb", parent="ses_cyaaaaaaaaaa")
+            c = adapters.OpenCodeAdapter(root=root).read("ses_cyaaaaaaaaaa")
+            self.assertEqual(c["id"], "ses_cyaa")
+            self.assertFalse(c["id"].startswith("oc-"))
+
+    def test_root_walk_is_directory_scoped(self):
+        # parent가 다른 directory에 있으면 해석 불가 → fail-closed(하네스 directory-scope 계약).
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _opencode_db(root, cwd="/want", sid="ses_scopedchildxx", parent="ses_scopedparent")
+            _opencode_db(root, cwd="/other", sid="ses_scopedparent")   # 다른 directory
+            c = adapters.OpenCodeAdapter(root=root).read("ses_scopedchildxx")
+            self.assertFalse(c["id"].startswith("oc-"))      # cross-directory root 안 씀
+
 
 def _claude_line(model="claude-fable-5", tool="Bash"):
     return json.dumps({"type": "assistant", "timestamp": "2026-07-12T10:00:00Z", "gitBranch": "main",

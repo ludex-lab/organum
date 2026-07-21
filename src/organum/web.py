@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -17,7 +18,7 @@ from organum.inspect import ts_age_seconds
 
 # 서버는 단일 스레드(HTTPServer) → 요청 간 공유 dict 안전. Vitals.update는 증분 tail.
 _parent_cache: dict[str, str] = {}
-_declared_cache: dict[str, tuple[float, str]] = {}  # path → (checked_at, 선언 id 또는 "")
+_declared_cache: dict = {}  # path → (content_sig, (마커 집합, complete)) — sig 변경=append 재스캔
 
 
 def _find_parent(child_full_id: str, cli_paths: list) -> str | None:
@@ -37,31 +38,130 @@ def _find_parent(child_full_id: str, cli_paths: list) -> str | None:
     return parent or None
 
 
-def _find_declared(path: str, cids: list[str]) -> str | None:
-    """관찰 셀(transcript) ↔ 선언 세포 id 잇기 — `organum join`이 출력한 `ORGANUM_CELL=<id>` 마커를
-    transcript 텍스트에서 찾는 cross-ref 휴리스틱(_find_parent와 같은 결, best-effort).
-    join은 세션 초반이 보통이라 head 512KB(+tail 64KB)만 본다. 매치는 캐시, 미매치는 10초마다 재확인."""
-    now = time.time()
-    hit = _declared_cache.get(path)
-    if hit and (hit[1] or now - hit[0] < 10.0):
-        return hit[1] or None
-    found = ""
+# canonical cell ID 계약(state.valid_cell_id)과 한 source. 마커 토큰의 **양쪽 경계를 다 계약에** 넣고
+# raw 토큰 전체를 valid_cell_id로 검증한다 — 부분매치를 conformant 증거로 쓰면 오조인(critic).
+#  · **시작 경계** `(?<![A-Za-z0-9_])`: prefix 직전이 문자열 시작이거나 env identifier 문자가 아닐
+#    때만 실제 마커. `NOT_ORGANUM_CELL=alpha`·`XORGANUM_CELL=…`처럼 긴 identifier의 suffix를 승격
+#    하지 않는다(재감사-6). `export `·줄 시작·JSON `"…` 뒤의 진짜 마커는 통과.
+#  · **종료 경계** = 공백·따옴표·백슬래시(EOL/JSON/shell): `alpha가`(가는 경계 아님)=raw `alpha가`=
+#    invalid, `alpha\n`(JSON 이스케이프)=raw `alpha`=valid(재감사-5).
+# 토큰은 `*`(빈 토큰 포함)라 이 **한 regex**가 prefix 카운트와 conformant 카운트를 동시에 낸다 —
+# 마커 매치와 prefix 집계가 서로 다른 문법을 갖지 않게(critic: 조용한 문법 분기 금지).
+_MARKER_RE = re.compile(r"(?<![A-Za-z0-9_])ORGANUM_CELL=([^\s\"'\\]*)")
+_SCAN_CAP = 32_000_000   # 완전성 상한 — 넘으면 uniqueness 증명 불가 → scan-incomplete
+_CHUNK = 1_000_000       # 읽기 단위 (테스트가 축소해 모든 split 위치 검증)
+
+
+def _path_sig(path: str):
+    """content-version 서명 — 파일=(mtime_ns,size), 디렉터리=파일들 (경로,mtime_ns,size) 튜플.
+    append/변경이면 서명이 바뀌어 캐시 무효화(critic: stale positive 방지)."""
+    p = Path(path)
+    if p.is_dir():
+        sig = []
+        for f in sorted(p.rglob("*")):
+            try:
+                if f.is_file():
+                    stt = f.stat()
+                    sig.append((str(f), stt.st_mtime_ns, stt.st_size))
+            except OSError:
+                continue
+        return tuple(sig)
+    stt = p.stat()
+    return (stt.st_mtime_ns, stt.st_size)
+
+
+def _scan_markers(path: str) -> tuple[frozenset, int, bool]:
+    """(distinct 계약-conformant id 집합, non-conformant marker 수, complete). **distinct identity**를
+    센다 — 같은 id가 여러 번 나와도 1개(작업 중 반복 출력). 비ASCII·>40 등 계약 위반 마커는
+    prefix는 있으나 conformant ID를 못 내므로 non-conformant로 카운트 → 그 자체가 별개 identity라
+    ambiguity를 유발(critic Blocker 1: 파싱 못 하는 마커를 조용히 버리지 않음). line-based라 chunk
+    경계가 마커를 쪼개지 않는다(Blocker 2). ambiguity 확정 시 조기종료. cap·읽기실패=complete False."""
+    ids: set = set()
+    nonconf = 0
+    read = 0
+    over_cap = False
+    unreadable = False
+
+    def ambiguous() -> bool:  # ≥2 distinct 또는 conformant+non-conformant 혼재
+        return len(ids) >= 2 or (len(ids) >= 1 and nonconf >= 1)
+
+    def eat(text: str):
+        nonlocal nonconf
+        from organum.state import valid_cell_id, cell_key
+        toks = _MARKER_RE.findall(text)          # 경계-앵커된 마커 occurrence (빈·invalid 토큰 포함)
+        # distinct-count 전에 cell_key 정규화 — case-insensitive 계약(재감사4): Agent+agent 반복 마커를
+        # 두 identity로 세어 false marker-ambiguous 내던 것 차단(정규화 전 raw set이었음).
+        conf = [cell_key(t) for t in toks if valid_cell_id(t)]  # raw 토큰 검증 후 정규화
+        ids.update(conf)
+        nonconf += len(toks) - len(conf)         # conformant를 못 낸 마커 = 계약 위반 → ambiguity
+
     try:
         p = Path(path)
-        size = p.stat().st_size
-        with open(p, encoding="utf-8", errors="replace") as fh:
-            text = fh.read(524288)
-            if size > 524288 + 65536:
-                fh.seek(size - 65536)
-                text += fh.read()
+        files = sorted(f for f in p.rglob("*") if f.is_file()) if p.is_dir() else [p]
     except OSError:
-        text = ""
-    for cid in cids:
-        if f"ORGANUM_CELL={cid}" in text:
-            found = cid
-            break
-    _declared_cache[path] = (now, found)
-    return found or None
+        return frozenset(), 0, False
+    for f in files:
+        try:
+            with open(f, encoding="utf-8", errors="replace") as fh:
+                carry = ""
+                while chunk := fh.read(_CHUNK):
+                    read += len(chunk)
+                    buf = carry + chunk
+                    nl = buf.rfind("\n")
+                    if nl == -1:            # 아직 줄 경계 없음 — 계속 모음(마커는 한 줄 안)
+                        carry = buf
+                    else:
+                        eat(buf[:nl])
+                        carry = buf[nl + 1:]
+                    if ambiguous():
+                        return frozenset(ids), nonconf, True   # 확정 답(complete)
+                    if read > _SCAN_CAP:
+                        over_cap = True
+                        break
+                if not over_cap:
+                    eat(carry)              # 마지막 줄(개행 없음)
+                    if ambiguous():
+                        return frozenset(ids), nonconf, True
+            if over_cap:
+                break
+        except OSError:
+            unreadable = True               # 못 읽은 파일 = 불완전(critic)
+            continue
+    return frozenset(ids), nonconf, (not over_cap and not unreadable)
+
+
+def _find_declared(path: str, cids: list[str]) -> tuple[str | None, str]:
+    """관찰 셀 ↔ 선언 세포 id + **원인**. distinct conformant id가 정확히 1개이고 non-conformant
+    마커가 없고 그 id가 후보에 있을 때만 (declared, "found"). 아니면 (None, reason):
+    scan-incomplete · no-marker(0개) · marker-ambiguous(≥2 identity 또는 혼재) · marker-unknown
+    (계약 위반 마커만이거나 conformant 1개인데 후보 밖). content-version 캐시 + pre/post 서명 동일."""
+    try:
+        sig0 = _path_sig(path)
+    except OSError:
+        return None, "scan-incomplete"
+    hit = _declared_cache.get(path)
+    if hit and hit[0] == sig0:
+        ids, nonconf, complete = hit[1]
+    else:
+        ids, nonconf, complete = _scan_markers(path)
+        try:
+            sig1 = _path_sig(path)
+        except OSError:
+            sig1 = None
+        if sig1 != sig0:                 # scan 도중 변경 → 신뢰 불가, 캐시 안 함
+            return None, "scan-incomplete"
+        _declared_cache[path] = (sig0, (ids, nonconf, complete))
+    if not complete:
+        return None, "scan-incomplete"
+    if len(ids) >= 2 or (len(ids) >= 1 and nonconf >= 1):
+        return None, "marker-ambiguous"
+    if not ids:
+        return (None, "marker-unknown") if nonconf else (None, "no-marker")
+    only = next(iter(ids))
+    # case-insensitive 매칭(cell id 계약, 2026-07-18) — 매치되면 declared cid 원본(case)을 반환.
+    from organum.state import cell_key
+    ck = {cell_key(c): c for c in cids}
+    return (ck[cell_key(only)], "found") if cell_key(only) in ck else (None, "marker-unknown")
 
 
 def escalations(cwd: Path) -> list:
@@ -81,12 +181,15 @@ def payload(cwd: Path) -> dict:
     from organum import session as _sess
     from organum import state as _st
 
+    from organum import roster as _roster
+
     raw = _ad.snapshot(cwd, window_min=30.0)  # 벤더별 관찰(Claude·Codex…)을 정규화 Cell로
     now = time.time()
     state_dir = cwd / _st.STATE_DIR_NAME  # 세션은 soma(read-only 스캔)
     sessions = _sess.open_sessions(state_dir) if state_dir.exists() else []
+    field_acts = _roster.field_activity(cwd, state_dir if state_dir.exists() else None)  # two-lens field-live
     retros = _sess.recent_retros(state_dir) if state_dir.exists() else []
-    sess_by_cell = {s["cell"]: s for s in sessions if s.get("cell")}
+    sess_by_cell = {_st.cell_key(s["cell"]): s for s in sessions if s.get("cell")}  # cell_key 키(재감사4)
     branch = None
     # 패밀리 부모 후보 = Claude 터미널 세션의 transcript 경로 (cross-ref 휴리스틱은 Claude 전용)
     cli_paths = [c["path"] for c in raw
@@ -107,16 +210,24 @@ def payload(cwd: Path) -> dict:
             parent = _find_parent(Path(c["path"]).stem, cli_paths)
         # 관찰 id ↔ 선언 id 재조정: 직접 매치 → ORGANUM_CELL 마커 cross-ref (텍스트 transcript만)
         declared = None
-        sess = sess_by_cell.get(c["id"])
+        sess = sess_by_cell.get(_st.cell_key(c["id"]))
         if sess is None and sessions and str(c.get("path") or "").endswith(".jsonl"):
-            declared = _find_declared(c["path"], [s["cell"] for s in sessions if s.get("cell")])
-            sess = sess_by_cell.get(declared) if declared else None
+            declared, _ = _find_declared(c["path"], [s["cell"] for s in sessions if s.get("cell")])
+            sess = sess_by_cell.get(_st.cell_key(declared)) if declared else None
+        # two-lens 조율 상태: web 셀은 전부 observed(transcript). declared=세션/선언 있음. field-live=
+        # 이 셀(선언 id 우선)의 relay/agora 게시·세션 note가 15분 안. → engaged/heads-down/idle/unattributed.
+        t_live = age < 90
+        fa = field_acts.get(_st.cell_key(declared or c["id"]))
+        f_live = bool(fa is not None and fa <= 900)
+        coord = _roster._coord_state(transcript_live=t_live, field_live=f_live,
+                                     observed=True, declared=bool(declared or sess))
         cells.append({
             "id": c["id"], "vendor": c["vendor"],
             "model": c["model"] or "—",
             "in": c["in_tok"], "out": c["out_tok"], "cache": c["cache"], "tools": sum(tdict.values()),
             "touch": len(c["files"]), "last_ts": c["last_ts"], "last": "",
             "age": int(age), "live": age < 90,
+            "transcript_live": t_live, "field_live": f_live, "coordination_state": coord,
             "origin": origin, "parent": parent,
             "skills": dict(sorted(c["skills"].items(), key=lambda kv: -kv[1])[:4]) if isinstance(c["skills"], dict) else {},
             "tool_breakdown": dict(sorted(tdict.items(), key=lambda kv: -kv[1])[:6]),
@@ -130,6 +241,7 @@ def payload(cwd: Path) -> dict:
     try:  # 폴링에 편승하는 관측 영속화 — settle된(idle≥90s) 셀만, 실패해도 관제탑은 산다
         from organum import observatory as _obs
         _obs.record(state_dir, raw, reason="web", only_idle_sec=90.0)
+        _obs.record_integrity(state_dir)  # core-integrity 시간축 감시도 편승(fossil 탐지)
     except Exception:
         pass
     return {
@@ -180,6 +292,7 @@ header{display:flex;align-items:baseline;gap:.8rem;flex-wrap:wrap;border-bottom:
 .cell h2 .m{color:var(--ink2);font-weight:400}
 .cell h2 .orig{font-size:.66rem;padding:.05rem .38rem;border-radius:5px;border:1px solid var(--rule);color:var(--slate)}
 .cell h2 .orig.sub{color:var(--moss);border-color:var(--moss)}
+.cell h2 .cs{font-family:var(--mono);font-size:.6rem;color:var(--slate);letter-spacing:.02em}
 .row{font-family:var(--mono);font-size:.8rem;color:var(--ink2)}
 .row .k{color:var(--ink)} .q{color:var(--moss)}
 .last{font-family:var(--mono);font-size:.78rem;color:var(--slate);border-top:1px dashed var(--rule);padding-top:.45rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -292,19 +405,23 @@ async function tick(){
     if(sig!==prev){lastChange=Date.now();prev=sig;}
     document.getElementById("idle").textContent="idle "+Math.round((Date.now()-lastChange)/1000)+"s";
     document.getElementById("proj").textContent="\\u00b7 "+d.project+(d.branch?(" \\u00b7 \\u2325"+d.branch):"");
-    document.getElementById("cells").textContent=d.cells+" cell"+(d.cells===1?"":"s");
+    var hd=d.cell_list.filter(function(x){return x.coordination_state==="heads-down";}).length;
+    document.getElementById("cells").textContent=d.cells+" cell"+(d.cells===1?"":"s")+(hd?" \\u00b7 "+hd+" heads-down":"");
     const a=d.aggregate;
     document.getElementById("agg").innerHTML="\\u03a3 in <b>"+fmt(a["in"])+"</b> \\u00b7 out <b>"+fmt(a.out)+"</b> \\u00b7 cache <b>"+fmt(a.cache)+"</b> \\u00b7 tools <b>"+a.tools+"</b> &nbsp;\\u00b7&nbsp; "+esc(t("converge"));
     currentCells=d.cell_list;renderChips(currentCells);renderAlerts(d.alarms,d.escalations);renderSessions(d.sessions,d.retros);
     const g=document.getElementById("grid");
     if(!d.cell_list.length){g.innerHTML='<div class="empty">'+esc(t("noCells"))+'</div>';return;}
+    var CS={engaged:["\\u25cf","var(--moss)"],"heads-down":["\\u25d0","var(--carmine)"],idle:["\\u25cb","var(--slate)"],unattributed:["\\u25cd","var(--slate)"],"declared-unobserved":["\\u25cc","var(--slate)"]};
     g.innerHTML=d.cell_list.map(function(c){
       const skills=Object.keys(c.skills||{}).map(function(k){return k+"\\u00d7"+c.skills[k];}).join(" \\u00b7 ");
       const tb=c.tool_breakdown||{};
       const tools=Object.keys(tb).map(function(k){return k+"\\u00d7"+tb[k];}).join(" \\u00b7 ");
-      const dot='<span style="color:'+(c.live?"var(--moss)":"var(--slate)")+'">\\u25cf</span> ';
+      var cs=CS[c.coordination_state]||[c.live?"\\u25cf":"\\u25cb",c.live?"var(--moss)":"var(--slate)"];
+      const dot='<span style="color:'+cs[1]+'" title="'+esc(c.coordination_state||"")+'">'+cs[0]+'</span> ';
+      var csb=(c.coordination_state&&c.coordination_state!=="engaged")?' <span class="cs">'+esc(c.coordination_state)+'</span>':"";
       const age=c.live?"live":(c.age<3600?Math.round(c.age/60)+"m "+t("ago"):Math.round(c.age/3600)+"h "+t("ago"));
-      return '<div class="cell'+(c.live?"":" stale")+'"><h2><span>'+dot+esc(c.id)+(c.declared&&c.declared!==c.id?" \\u00b7 "+esc(c.declared):"")+(c.fallback?" \\u26a0":"")+'</span><span class="m">'+esc((c.vendor?c.vendor+" · ":"")+c.model)+' <span class="orig'+(c.origin==="subagent"?" sub":"")+'">'+esc(c.origin==="subagent"?("subagent"+(c.parent?" \\u2190 "+c.parent:"")):c.origin)+'</span></span></h2>'
+      return '<div class="cell'+(c.live?"":" stale")+'"><h2><span>'+dot+esc(c.id)+(c.declared&&c.declared!==c.id?" \\u00b7 "+esc(c.declared):"")+csb+(c.fallback?" \\u26a0":"")+'</span><span class="m">'+esc((c.vendor?c.vendor+" · ":"")+c.model)+' <span class="orig'+(c.origin==="subagent"?" sub":"")+'">'+esc(c.origin==="subagent"?("subagent"+(c.parent?" \\u2190 "+c.parent:"")):c.origin)+'</span></span></h2>'
         +(c.session?'<div class="row"><span class="srole">['+esc(c.session.role||"\\u2014")+']</span> '+esc(c.session.intent)+'</div>':"")
         +'<div class="row">in <span class="k">'+fmt(c["in"])+'</span> \\u00b7 out <span class="k">'+fmt(c.out)+'</span> \\u00b7 cache '+fmt(c.cache)+' \\u00b7 tools <span class="k">'+c.tools+'</span> \\u00b7 touch '+c.touch+'</div>'
         +(skills?'<div class="row">skills: '+esc(skills)+'</div>':"")

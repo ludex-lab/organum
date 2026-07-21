@@ -87,6 +87,28 @@ class TestMcp(unittest.TestCase):
             ])
             self.assertEqual(resps[0]["error"]["code"], -32601)
 
+    def test_post_carries_from_id(self):
+        # 재감사4~5: MCP post 경로도 from_id를 봉투에(전 표면). agora+relay 둘 다 round-trip 고정.
+        from organum import agora, relay
+        with tempfile.TemporaryDirectory() as td:
+            cwd = self._init(td)
+            _run(cwd, "chief", [
+                {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                 "params": {"name": "agora_post", "arguments": {"body": "from mcp"}}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                 "params": {"name": "relay_send", "arguments": {"body": "dm", "to": "all"}}}])
+            self.assertTrue(any(p.get("from_id") == "chief" for p in agora.list_all(cwd)))
+            self.assertTrue(any(m.get("from_id") == "chief" for m in relay.list_all(cwd)))
+
+    def test_alarm_carries_from_id(self):
+        # 재감사6 B-minor: alarm envelope도 from_id round-trip (세 표면 완결)
+        from organum import field
+        with tempfile.TemporaryDirectory() as td:
+            cwd = self._init(td)
+            _run(cwd, "human", [{"jsonrpc": "2.0", "id": 1, "method": "tools/call",  # human은 alarm 발동 가능
+                 "params": {"name": "alarm_sound", "arguments": {"body": "pause", "level": "notice"}}}])
+            self.assertTrue(any(m.get("from_id") == "human" for m in field.list_all(cwd, "alarm")))
+
 
 if __name__ == "__main__":
     unittest.main()

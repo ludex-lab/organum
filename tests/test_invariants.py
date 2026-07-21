@@ -26,6 +26,20 @@ class Inv1_편지는_덮어쓰지_않는다(unittest.TestCase):
             bodies = {p.read_text(encoding="utf-8").splitlines()[-1] for p in files}
             self.assertEqual(len(bodies), 5)                  # 내용도 전부 생존
 
+    def test_atomic_publish_never_shows_partial_or_temp(self):
+        # 원자적 append-before-publish: 발행 시점 이전엔 파일이 아예 안 보이고, 보이면
+        # 완결된 상태다. temp(.tmp)는 *.md 글롭·목록에 절대 안 잡힌다 (Codex 조사 P0).
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            fname = field.post(cwd, "relay", "완결 본문", frm="a", to="b", topic="t")
+            d = cwd / ".organum" / "relay"
+            self.assertEqual([p.name for p in d.glob("*.md")], [fname])   # 최종 1개만
+            self.assertEqual(list(d.glob("*.tmp")), [])                   # temp 잔재 0
+            self.assertEqual(list(d.glob(".*")), [])                      # 숨김 잔재 0
+            meta, body = field.parse_msg((d / fname).read_text(encoding="utf-8"))
+            self.assertEqual(meta.get("from"), "a")          # 발행된 파일은 항상 완결
+            self.assertIn("완결 본문", body)
+
 
 class Inv2_frontmatter_주입_불가(unittest.TestCase):
     # 직렬화→파싱 실경로: parse_msg가 splitlines를 쓰므로 그 모든 줄구분자로 주입을 시도한다

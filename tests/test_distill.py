@@ -59,12 +59,51 @@ class TestDistillForm(unittest.TestCase):
             self.assertIn("## Frontier", wm)
             self.assertEqual(guard.check_wm_shape(wm), [])  # 저장된 것은 형태 계약 통과
 
-    def test_prose_body_rejected_not_written(self):
+    def test_prose_body_rejected_under_map_profile(self):
         with tempfile.TemporaryDirectory() as td:
             state = _state(Path(td))
             with self.assertRaises(distill.DistillError):
-                distill.distill(state, "build", "자료", generate=_fake(PROSE_BODY))
-            self.assertFalse((state / "worldmodel" / "build.md").exists())  # prose는 저장 안 됨
+                distill.distill(state, "build", "자료", generate=_fake(PROSE_BODY))  # 기본=map
+            self.assertFalse((state / "worldmodel" / "build.md").exists())  # map 프로파일은 거부
+
+
+class TestDistillProfiles(unittest.TestCase):
+    """form>content는 도메인-특정(P3 null) → 프로파일. prose 프로파일은 서술을 저장한다."""
+
+    NARRATIVE = ("이 코딩 프로젝트는 CLI와 어댑터로 구성된다. 어제 관측층을 손봤고, "
+                 "guard 계약이 아직 유동적이다. 다음엔 프로파일 반영을 검증한다.")
+
+    def test_prose_profile_accepts_narrative(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _state(Path(td))
+            r = distill.distill(state, "coding", self.NARRATIVE,
+                                profile="prose", generate=_fake(self.NARRATIVE))
+            self.assertEqual(r["profile"], "prose")
+            wm = (state / "worldmodel" / "coding.md").read_text(encoding="utf-8")
+            self.assertIn("# WM: coding", wm)                 # 저장됨(형태 거부 없음)
+            self.assertIn("어댑터", wm)
+            self.assertNotEqual(guard.check_wm_shape(wm), [])  # form 계약은 안 통과하지만 저장됨
+
+    def test_prose_profile_still_guards_error_fallback(self):
+        # 프로파일과 무관하게 저장 경계(error-fallback)는 항상 막는다
+        with tempfile.TemporaryDirectory() as td:
+            state = _state(Path(td))
+            with self.assertRaises(distill.DistillError):
+                distill.distill(state, "coding", "자료", profile="prose",
+                                generate=_fake("[Error: CLI timed out]"))
+            self.assertFalse((state / "worldmodel" / "coding.md").exists())
+
+    def test_unknown_profile_rejected(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _state(Path(td))
+            with self.assertRaises(distill.DistillError):
+                distill.distill(state, "x", "자료", profile="freeform", generate=_fake("무엇이든"))
+
+    def test_map_profile_is_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            state = _state(Path(td))
+            r = distill.distill(state, "build", "자료", generate=_fake(FORM_BODY))
+            self.assertEqual(r["profile"], "map")             # 기본=map(하위호환)
 
     def test_delegation_error_not_written(self):
         with tempfile.TemporaryDirectory() as td:

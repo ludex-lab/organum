@@ -37,6 +37,11 @@ MSG = {
         "sum": "  Σ {vendor} {n} sessions · duration {dur} · in {in_} · tools {tools} · files {files}",
         "legend": "\n  '—' = unmeasured (the vendor doesn't record it on disk) — never a silent zero."
                   " Token semantics differ per vendor; duration, tools and files are the safe axes.",
+        "integ.hdr": "\n  ─ core-integrity audit (bless = git commit · reconstructive) ─",
+        "integ.incomplete": "  ⚠ scan incomplete — core-manifest is corrupt; declared core dropped. "
+                            "Partial result; not 'all blessed'.",
+        "integ.legend": "  detection, not verdict — attribution is reconstructive (git + transcripts), "
+                        "not organum provenance. Sessions shown are active around the last bless.",
     },
     "ko": {
         "desc": "사후 계측 — 이 폴더에서 돌았던 AI 에이전트 세션들의 소요시간·토큰·툴 사용을 "
@@ -53,6 +58,11 @@ MSG = {
         "sum": "  Σ {vendor} {n}세션 · 소요 {dur} · in {in_} · tools {tools} · files {files}",
         "legend": "\n  '—' = 미측정(그 벤더가 디스크에 안 남김) — 0이 아닙니다."
                   " 토큰 계수 의미는 벤더별로 다릅니다(교차 비교는 시간·툴·파일이 안전).",
+        "integ.hdr": "\n  ─ core-integrity 감사 (bless = git commit · 재구성) ─",
+        "integ.incomplete": "  ⚠ scan 불완전 — core-manifest 손상으로 선언 core 탈락. "
+                            "부분 결과이며 'all blessed' 아님.",
+        "integ.legend": "  탐지지 판결 아님 — 귀속은 재구성적(git + transcript)이지 organum provenance "
+                        "아님. 표시된 세션은 마지막 bless 무렵 활성이던 것.",
     },
 }
 
@@ -108,35 +118,83 @@ def collect(path: Path, window_days: float) -> list:
     return sorted(cells, key=lambda c: c.get("first_ts") or c.get("last_ts") or "")
 
 
-def render(cells: list, path: Path, window_days: float) -> str:
+def _sessions_at(cells: list, iso: str | None) -> list:
+    """iso 시각에 활성이던 재구성 세션(first_ts ≤ iso ≤ last_ts). reconstructive two-lens 귀속 evidence."""
+    if not iso:
+        return []
+    try:
+        t = datetime.datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return []
+    out = []
+    for c in cells:
+        try:
+            a = datetime.datetime.fromisoformat(str(c.get("first_ts")).replace("Z", "+00:00")) \
+                if c.get("first_ts") else None
+            b = datetime.datetime.fromisoformat(str(c.get("last_ts")).replace("Z", "+00:00")) \
+                if c.get("last_ts") else None
+        except (ValueError, TypeError):
+            continue
+        if a and b and a <= t <= b:
+            out.append({"vendor": c["vendor"], "model": c.get("model"), "id": c.get("id")})
+    return out
+
+
+def core_integrity(path: Path, cells: list) -> list:
+    """core-integrity 감사 — integrity.report(git-기반, state 불요·아무 폴더나) + 마지막 bless를 재구성
+    세션과 교차(reconstructive two-lens). inspector 고유: organum provenance 없이 transcript로 귀속.
+    반환 [{path, status, last_commit, active_sessions}]. git 저장소 아니면 []."""
+    from organum import integrity as _integ
+    if not _integ.is_git_repo(path):
+        return []
+    rep = _integ.report(path / ".organum")   # .organum 있으면 manifest, 없으면 AUTO_CORE만
+    for r in rep:
+        lc = r.get("last_commit")
+        r["active_sessions"] = _sessions_at(cells, lc.get("date") if lc else None)
+    return rep
+
+
+def render(cells: list, path: Path, window_days: float, integ: list | None = None,
+           integ_incomplete: bool = False) -> str:
     lines = [_t("hdr", name=path.name, days=window_days, n=len(cells))]
     if not cells:
         lines.append(_t("empty"))
-        return "\n".join(lines)
-    hdr = (f"  {'vendor':<9} {'model':<24} {_t('col.start'):<12} {_t('col.dur'):>7}"
-           f" {'in':>8} {'out':>7} {'cache':>7} {'tools':>5} {'files':>5}")
-    lines += [hdr, "  " + "─" * (len(hdr) - 2)]
-    for c in cells:
-        start = (c.get("first_ts") or "")[5:16].replace("T", " ") or "—"
-        model = (c.get("model") or "—")[:24]
-        lines.append(f"  {c['vendor']:<9} {model:<24} {start:<12} {_fmt_dur(c['duration_s']):>7}"
-                     f" {_fmt_tok(c.get('in_tok')):>8} {_fmt_tok(c.get('out_tok')):>7}"
-                     f" {_fmt_tok(c.get('cache')):>7} {c['tool_calls']:>5}"
-                     f" {len(c.get('files') or []):>5}")
-    # 벤더 합계 (2벤더 이상일 때만 — 비교가 이 도구의 존재 이유)
-    vendors = sorted({c["vendor"] for c in cells})
-    if len(vendors) > 1:
-        lines.append("")
-        for v in vendors:
-            vs = [c for c in cells if c["vendor"] == v]
-            durs = [c["duration_s"] for c in vs if c["duration_s"] is not None]
-            ins_ = [c["in_tok"] for c in vs if c.get("in_tok") is not None]
-            lines.append(_t("sum", vendor=f"{v:<7}", n=len(vs),
-                            dur=_fmt_dur(sum(durs)) if durs else "—",
-                            in_=_fmt_tok(sum(ins_)) if ins_ else "—",
-                            tools=sum(c["tool_calls"] for c in vs),
-                            files=sum(len(c.get("files") or []) for c in vs)))
-    lines.append(_t("legend"))
+    else:
+        hdr = (f"  {'vendor':<9} {'model':<24} {_t('col.start'):<12} {_t('col.dur'):>7}"
+               f" {'in':>8} {'out':>7} {'cache':>7} {'tools':>5} {'files':>5}")
+        lines += [hdr, "  " + "─" * (len(hdr) - 2)]
+        for c in cells:
+            start = (c.get("first_ts") or "")[5:16].replace("T", " ") or "—"
+            model = (c.get("model") or "—")[:24]
+            lines.append(f"  {c['vendor']:<9} {model:<24} {start:<12} {_fmt_dur(c['duration_s']):>7}"
+                         f" {_fmt_tok(c.get('in_tok')):>8} {_fmt_tok(c.get('out_tok')):>7}"
+                         f" {_fmt_tok(c.get('cache')):>7} {c['tool_calls']:>5}"
+                         f" {len(c.get('files') or []):>5}")
+        vendors = sorted({c["vendor"] for c in cells})  # 벤더 합계 (2벤더 이상 — 비교가 존재 이유)
+        if len(vendors) > 1:
+            lines.append("")
+            for v in vendors:
+                vs = [c for c in cells if c["vendor"] == v]
+                durs = [c["duration_s"] for c in vs if c["duration_s"] is not None]
+                ins_ = [c["in_tok"] for c in vs if c.get("in_tok") is not None]
+                lines.append(_t("sum", vendor=f"{v:<7}", n=len(vs),
+                                dur=_fmt_dur(sum(durs)) if durs else "—",
+                                in_=_fmt_tok(sum(ins_)) if ins_ else "—",
+                                tools=sum(c["tool_calls"] for c in vs),
+                                files=sum(len(c.get("files") or []) for c in vs)))
+        lines.append(_t("legend"))
+    if integ or integ_incomplete:  # core-integrity 감사 섹션 (state 불요 — 아무 폴더나)
+        lines.append(_t("integ.hdr"))
+        if integ_incomplete:  # 손상 manifest → 선언 core 탈락, 부분 결과임을 명시(critic 재감사3 B5-c)
+            lines.append(_t("integ.incomplete"))
+        for r in integ:
+            mark = {"blessed": "●", "unblessed": "◐", "unprotected": "◌"}.get(r["status"], "○")
+            lc = r.get("last_commit")
+            bless = f"{lc['author']}·{lc['date'][:10]}" if lc else "—"
+            act = r.get("active_sessions") or []
+            who = ("  · bless 무렵 세션: " + ", ".join(s["vendor"] for s in act)) if act else ""
+            lines.append(f"  {mark} {r['path']} · {r['status']} · bless {bless}{who}")
+        lines.append(_t("integ.legend"))
     return "\n".join(lines)
 
 
@@ -152,16 +210,19 @@ def main(argv: list | None = None) -> int:
         print(_t("err.nodir", path=path), file=sys.stderr)
         return 1
     cells = collect(path, args.window)
+    integ = core_integrity(path, cells)   # core-integrity 감사 (git-기반, reconstructive 세션 교차)
+    from organum import integrity as _integ
+    integ_incomplete = _integ.is_git_repo(path) and not _integ.manifest_ok(path / ".organum")
     if args.html:
         from organum.htmlreport import inspector_page
         out = Path(args.html).expanduser()
         out.write_text(inspector_page(cells, path.name, args.window), encoding="utf-8")
         print(_t("html.saved", path=out, n=len(cells)))
         return 0
-    if args.json:
-        print(json.dumps(cells, ensure_ascii=False, indent=1))
+    if args.json:  # shipped 계약 유지 — sessions 리스트 그대로(케이스스터디·파이프 무손상).
+        print(json.dumps(cells, ensure_ascii=False, indent=1))  # core-integrity는 text 뷰 + observatory integrity --json
     else:
-        print(render(cells, path, args.window))
+        print(render(cells, path, args.window, integ, integ_incomplete))
     return 0
 
 

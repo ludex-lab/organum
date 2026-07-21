@@ -122,6 +122,36 @@ def load_meta(state_dir: Path) -> dict:
 
 _CELL_SLUG_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 
+# canonical cell ID 계약 (2026-07-16, critic): ASCII `[A-Za-z0-9._-]{1,40}`, 선/후행 점 금지
+# (경로 traversal). 모든 쓰기 ingress(_forid·session.start)가 이 validator로 거부한다 — ID 문법이
+# 한 source여야 marker 파서·조인이 정의된 domain 위에 선다. 자유 ID를 막아 조인 오귀속을 차단.
+CELL_ID_RE = re.compile(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,38}[A-Za-z0-9_-]\Z|[A-Za-z0-9_-]\Z")
+
+
+def valid_cell_id(cid: str) -> bool:
+    return bool(cid) and bool(CELL_ID_RE.match(cid))
+
+
+def require_valid_cell_id(cid: str) -> str:
+    if not valid_cell_id(cid):
+        raise ValueError(
+            f"cell id {cid!r}가 계약 위반 — ASCII [A-Za-z0-9._-] 1~40자, 선/후행 점 금지. "
+            "(marker 파서·brain↔role 조인이 정의된 id domain을 요구한다.)")
+    return cid
+
+
+def cell_key(s: str) -> str:
+    """field(relay/agora cursor·주소·자기제외·read)·roster·soma에서 쓰는 **단일 identity 키**.
+    cell id는 **case-insensitive**(계약 결정 2026-07-18) — `Agent`와 `agent`는 같은 셀. 소문자로
+    정규화한다: (a) macOS 등 case-insensitive FS에서 `Agent.json`/`agent.json`이 같은 locus로
+    뭉개지던 것 차단(critic 재감사3 A-blocker2), (b) 값 전체를 키로 써 앞 8자 절단(옛 _id8/[:8])
+    금지 — 8자 equivalence class 붕괴(`playtester-a`≡`b`)를 없앤다. 점(`.`)은 하이픈으로 바꾸지
+    않아 `a.b`와 `a-b`는 여전히 구별(slug와 다름). 비-canonical(legacy·자유 문자열)만 비절단 sanitize."""
+    s = (s or "").strip()
+    if valid_cell_id(s):
+        return s.lower()
+    return (re.sub(r"[^0-9A-Za-z가-힣_.-]+", "-", s).strip("-.").lower() or "x")[:40]
+
 
 def _cell_slug(cell_id: str) -> str:
     # strip("-.")로 선행/후행 점을 제거 → "." ".." 같은 경로 traversal id가 루트로 새지 않게
@@ -140,8 +170,11 @@ def soma_dir(state_dir: Path, cell_id: str | None = None) -> Path:
             owner = load_meta(state_dir).get("agent")
         except (OSError, ValueError):
             owner = None
-        if cell_id != owner:
-            return state_dir / "cells" / _cell_slug(cell_id)
+        # cell_key로 비교·라우팅 — case-insensitive 계약(2026-07-18): Agent≡agent가 owner root와
+        # guest soma로 갈려 같은 셀이 세션 2개를 여는 것 차단(critic 재감사4 Blocker1). guest dir도
+        # cell_key(소문자·full)라 cross-platform(Linux case-sensitive FS)에서도 한 locus.
+        if cell_key(cell_id) != cell_key(owner or ""):
+            return state_dir / "cells" / cell_key(cell_id)
     return state_dir
 
 

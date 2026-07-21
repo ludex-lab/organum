@@ -26,11 +26,13 @@ def relay_dir(cwd: Path) -> Path:
 
 def send(cwd: Path, body: str, frm: str = "cell", to: str = "all", topic: str = "",
          src: str = "relay-cli", thread: str = "", reply_to: str = "",
-         escalate: bool = False) -> str | None:
+         escalate: bool = False, from_id: str = "", idem_key: str = "") -> str | None:
     """편지 드롭 (지향). 빈 본문이면 None. thread/reply_to = 스레딩(부모 thread 상속).
-    escalate=True = human 개입 요청 — 관제탑 에스컬레이션 패널에 뜬다."""
-    return _f.post(cwd, FIELD, body, frm=frm, to=to, topic=topic, src=src,
-                   thread=thread, reply_to=reply_to, escalate=escalate)
+    escalate=True = human 개입 요청 — 관제탑 에스컬레이션 패널에 뜬다.
+    from_id = canonical sender identity(display frm과 분리 — 자기제외 판정용).
+    idem_key = 멱등 토큰(재전송 dedup)."""
+    return _f.post(cwd, FIELD, body, frm=frm, to=to, topic=topic, src=src, from_id=from_id,
+                   thread=thread, reply_to=reply_to, escalate=escalate, idem_key=idem_key)
 
 
 def list_all(cwd: Path, limit: int = 60) -> list:
@@ -45,8 +47,8 @@ def mark_read(cwd: Path, for_id: str, filename: str) -> None:
     return _f.mark_read(cwd, FIELD, for_id, filename)
 
 
-def mark_join(cwd: Path, for_id: str) -> str:
-    return _f.mark_join(cwd, FIELD, for_id)
+def mark_join(cwd: Path, for_id: str, reset: bool = False) -> str:
+    return _f.mark_join(cwd, FIELD, for_id, reset=reset)
 
 
 def inbox(cwd: Path, for_id: str, include_read: bool = False) -> list:

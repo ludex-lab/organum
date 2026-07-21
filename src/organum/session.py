@@ -17,6 +17,7 @@ organum은 세션을 능동적으로 끊거나 재촉하지 않는다. status·i
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -24,9 +25,32 @@ from organum import state as st
 
 _TS_FMT = "%Y-%m-%dT%H:%M:%SZ"
 
+# loadout(organ 효과 매트릭스 v0.1.1 §1): 이 세션에 붙은 organ 집합. `["*"]`=전-preset(unvaried,
+# 기본), `[]`=BARE(organ 없음), 그 외=organ 슬러그 리스트. loadout 대조가 없으면 어떤 cell도
+# organ 효과를 주장 못 하므로(RWE는 현재 상수 프리셋), 명시 필드로 두어 confound를 데이터에 드러낸다.
+LOADOUT_FULL = ["*"]
+_ORGAN_SLUG_RE = re.compile(r"[a-z][a-z0-9-]*\Z")
+
 
 class SessionError(Exception):
     """세션 규율 위반 (열린 세션 중복·빈 의도·잘못된 피어 노트 등)."""
+
+
+def normalize_loadout(val) -> list[str]:
+    """loadout 정규화·검증. None=전-preset `["*"]` · "bare"/[]=BARE `[]` · 문자열/리스트=슬러그.
+    슬러그는 `[a-z][a-z0-9-]*` 또는 `*`. 형식 위반은 SessionError(자유 organ 이름 차단)."""
+    if val is None:
+        return list(LOADOUT_FULL)
+    toks = [t for t in re.split(r"[\s,]+", val.strip()) if t] if isinstance(val, str) else list(val)
+    if [str(t).lower() for t in toks] == ["bare"]:
+        return []
+    out = []
+    for t in toks:
+        t = str(t)
+        if t != "*" and not _ORGAN_SLUG_RE.match(t):
+            raise SessionError(f"loadout organ {t!r} 형식 위반 — [a-z][a-z0-9-]* 또는 '*'/'bare'.")
+        out.append(t)
+    return out
 
 
 # 기본 역할 헌장 — dry·짧게. commons(state_dir/roles/<slug>.md)로 현장별 override 가능.
@@ -148,8 +172,14 @@ def resolve_charter(state_dir: Path, role: str) -> str:
     return base.rstrip() + "\n" + COORDINATION_DISCIPLINE
 
 
-def start(soma: Path, cell: str, role: str, intent: str, charter: str) -> dict:
-    """세션 선언. 이미 열린 세션이 있으면 거부 (한 세포 = 한 열린 세션 = 규율)."""
+def start(soma: Path, cell: str, role: str, intent: str, charter: str,
+          loadout=None) -> dict:
+    """세션 선언. 이미 열린 세션이 있으면 거부 (한 세포 = 한 열린 세션 = 규율).
+    loadout = 이 세션에 붙은 organ 집합(기본 전-preset `["*"]`, v0.1.1 §1) — observation row로 흐른다."""
+    if not st.valid_cell_id(cell):  # canonical id 계약 — ledger 쓰기 ingress (critic)
+        raise SessionError(
+            f"cell id {cell!r}가 계약 위반 — ASCII [A-Za-z0-9._-] 1~40자, 선/후행 점 금지.")
+    loadout = normalize_loadout(loadout)
     _, r_open = _open(soma)
     if r_open is not None:
         raise SessionError(
@@ -164,6 +194,7 @@ def start(soma: Path, cell: str, role: str, intent: str, charter: str) -> dict:
         "cell": cell,
         "role": role,
         "intent": intent.strip(),
+        "loadout": loadout,
         "charter": charter,
         "started_at": st.utc_now_iso(),
         "ended_at": None,
@@ -187,6 +218,17 @@ def note(soma: Path, text: str) -> dict:
     rec["notes"].append({"ts": st.utc_now_iso(), "text": text.strip()})
     _save(p, rec)
     return rec
+
+
+def open_session_for_cell(state_dir: Path, cell_id: str) -> dict | None:
+    """사이트 전체에서 이 셀(cell_key)의 열린 세션을 찾는다 — soma 경로 위치와 무관. "한 canonical
+    cell = 열린 세션 하나" 불변식 방어(critic 재감사5): legacy case-preserving soma(`cells/Worker`)와
+    신규 `cells/worker`가 case-sensitive FS에서 갈려도 같은 canonical cell의 중복 role 세션을 막는다."""
+    key = st.cell_key(cell_id)
+    for s in open_sessions(state_dir):
+        if s.get("cell") and st.cell_key(s["cell"]) == key:
+            return s
+    return None
 
 
 def status(soma: Path) -> dict | None:
@@ -229,10 +271,32 @@ def open_sessions(state_dir: Path) -> list[dict]:
             out.append({
                 "sid": rec["sid"], "cell": rec.get("cell"), "role": rec.get("role"),
                 "intent": rec["intent"], "beats": len(rec["notes"]),
+                "soma": str(soma),   # 실제 write locus — site-wide 게이트가 legacy vs canonical soma 판별용
                 "age_min": int((now - _parse_ts(rec["started_at"])).total_seconds() // 60),
                 "idle_min": int((now - _parse_ts(last)).total_seconds() // 60),
             })
     out.sort(key=lambda s: s["idle_min"])
+    return out
+
+
+def sessions_for_join(state_dir: Path) -> list[dict]:
+    """조인용 전 세션(열림+종료) — brain↔role 조인 배관 (협업벤치 v0.1, observation row).
+    open_sessions와 달리 종료 세션도 낸다: distill·특징화는 세션 종료 *후*가 정상이라,
+    관측(observatory)에 role을 붙이려면 종료 세션까지 필요하다."""
+    out = []
+    for soma in _all_soma_dirs(state_dir):
+        for p in _iter_paths(soma):
+            try:
+                rec = _load(p)
+            except (OSError, json.JSONDecodeError):
+                continue
+            out.append({
+                "sid": rec.get("sid"), "cell": rec.get("cell"), "role": rec.get("role"),
+                "intent": rec.get("intent"), "started_at": rec.get("started_at"),
+                "ended_at": rec.get("ended_at"),
+                # 레거시(loadout 키 이전) 세션은 전-preset(unvaried) — 과거 dogfood는 전부 전-organ.
+                "loadout": rec.get("loadout", list(LOADOUT_FULL)),
+            })
     return out
 
 

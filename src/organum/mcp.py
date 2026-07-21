@@ -97,14 +97,15 @@ def _fmt(msgs: list) -> str:
 def _call(cwd: Path, cell_id: str, name: str, args: dict) -> str:
     base = _base(cwd)
     if name == "agora_post":
-        fn = _agora.post(base, args.get("body", ""), frm=cell_id, topic=args.get("topic", "") or "",
+        fn = _agora.post(base, args.get("body", ""), frm=cell_id, from_id=cell_id,  # MCP 셀=canonical identity
+                         topic=args.get("topic", "") or "",
                          src="mcp", thread=args.get("thread", "") or "", reply_to=args.get("reply_to", "") or "",
                          escalate=bool(args.get("escalate")))
         return f"posted: {fn}" if fn else "빈 본문 — 게시 안 됨"
     if name == "agora_read":
         return _fmt(_agora.read(base, cell_id, include_read=bool(args.get("include_read"))))
     if name == "relay_send":
-        fn = _relay.send(base, args.get("body", ""), frm=cell_id, to=args.get("to", "all"),
+        fn = _relay.send(base, args.get("body", ""), frm=cell_id, from_id=cell_id, to=args.get("to", "all"),
                          topic=args.get("topic", "") or "", src="mcp",
                          thread=args.get("thread", "") or "", reply_to=args.get("reply_to", "") or "",
                          escalate=bool(args.get("escalate")))
@@ -115,8 +116,8 @@ def _call(cwd: Path, cell_id: str, name: str, args: dict) -> str:
         from organum import alarm as _alarm
         try:
             fn = _alarm.sound(base, _state.require_state_dir(cwd), args.get("body", ""), frm=cell_id,
-                              to=args.get("to", "all") or "all", level=args.get("level", "notice") or "notice",
-                              src="mcp")
+                              from_id=cell_id, to=args.get("to", "all") or "all",
+                              level=args.get("level", "notice") or "notice", src="mcp")
         except _alarm.AlarmError as e:
             return f"거부: {e}"
         return f"sounded: {fn}" if fn else "빈 본문 — 발동 안 됨"

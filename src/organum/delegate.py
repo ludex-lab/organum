@@ -1,4 +1,5 @@
-"""위임 모듈 — LLM이 필요한 작업(distill/reflect 내용 생성)을 사용자의 CLI에 서브프로세스로.
+"""위임 모듈 — LLM 추론이 필요한 의례(현재 `distill` 하나뿐)를 사용자 CLI에 서브프로세스로.
+(reflect는 위임이 아니라 caller가 준 항목의 결정적 carry-forward — 이 모듈을 쓰지 않는다.)
 
 organum은 자체 LLM 오케스트레이션을 하지 않는다 (경계 규율). 이 모듈은 사용자가 이미 쓰는
 CLI(claude 등)를 호출하는 얇은 층이다. 검증된 레시피: docs/spike-recheck-2026-07-04.md.

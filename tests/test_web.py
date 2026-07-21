@@ -30,6 +30,45 @@ class TestWebPayload(unittest.TestCase):
         self.assertTrue(codex["live"])           # 방금 = live
         self.assertEqual(d["aggregate"]["out"], 300)
 
+    def test_coordination_state_unattributed_without_declared(self):
+        # two-lens: 관측(transcript)만 있고 세션/선언 join 없으면 role 미주장 = unattributed
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        fake = [adapters._cell("claude", "aaaa1111", model="fable-5", origin="terminal",
+                               out_tok=10, tools={"Edit": 1}, files=["a.py"], last_ts=now)]
+        orig = adapters.snapshot
+        adapters.snapshot = lambda cwd, window_min=30.0: fake
+        try:
+            d = web.payload(Path("/x"))    # state 없음 → 미declared
+        finally:
+            adapters.snapshot = orig
+        c = d["cell_list"][0]
+        self.assertEqual(c["coordination_state"], "unattributed")
+        self.assertTrue(c["transcript_live"])
+        self.assertFalse(c["field_live"])
+
+    def test_coordination_state_engaged_with_session_and_field(self):
+        # 관측 + 세션(declared) + field 게시(field-live) → engaged
+        import tempfile
+        from organum import state as _st, session as _sess, agora as _agora
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            state, _ = _st.init_state_dir(cwd, "owner")
+            soma = _st.ensure_soma(state, "c1")
+            _sess.start(soma, "c1", "critic", "리뷰", "charter")   # 선언(open session)
+            _agora.post(cwd, "리뷰 시작", frm="c1", from_id="c1")   # field 게시
+            fake = [adapters._cell("claude", "c1", model="fable-5", origin="terminal",
+                                   out_tok=10, tools={"Edit": 1}, files=["a.py"], last_ts=now)]
+            orig = adapters.snapshot
+            adapters.snapshot = lambda c, window_min=30.0: fake
+            try:
+                d = web.payload(cwd)
+            finally:
+                adapters.snapshot = orig
+            c = d["cell_list"][0]
+            self.assertEqual(c["coordination_state"], "engaged")
+            self.assertTrue(c["field_live"])
+
     def test_unmeasured_tokens_stay_none(self):
         # 미측정(None)은 0으로 뭉개지 않는다 — 셀엔 null(→프론트 '—'), 집계엔 측정된 것만
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
