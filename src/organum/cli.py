@@ -403,6 +403,25 @@ def cmd_migrate(args: argparse.Namespace) -> int:
 def cmd_checkup(args: argparse.Namespace) -> int:
     state_dir = _require_state()
     findings = checkup_mod.run(state_dir)
+    # substrate-health 선두 표면화 — 우선순위 경고(머신 생존 축; 2026-07-25 grok recap 실사고).
+    # run()과 분리 = 진단 순수성(머신-전역 스캔이 조직 진단과 섞이지 않게) · 읽기만(영속은
+    # observatory health/sync 몫). checkup rc는 organum 상태 오류(ERROR)만 — substrate alert의
+    # 스크립트 신호는 'observatory health'(exit 1)가 담당.
+    try:
+        from organum import health as _health
+        hrep = _health.measure(state_dir)
+        h_first = []
+        for x in hrep["findings"]:
+            tag = "ALERT" if x["severity"] == "alert" else "주의"
+            rate = f" · +{x['rate_mb_min']}MB/분" if x.get("rate_mb_min") else ""
+            size = f" · {x['mb']}MB" if x.get("mb") is not None else ""
+            h_first.append((checkup_mod.WARN,
+                            f"substrate-health {tag} [{x['kind']}] {x['vendor'] or '—'}{size}{rate}"
+                            f" · {x['path']} — {x['note']} → 케어테이커 assert 검토"
+                            f"('observatory health --assert')"))
+        findings = h_first + findings
+    except OSError as e:
+        findings = [(checkup_mod.WARN, f"substrate-health scan 불가(진단 실패, 관측 정직성): {e}")] + findings
     text, has_error = checkup_mod.render(findings)
     print(text)
     rc = 1 if has_error else 0
@@ -456,6 +475,78 @@ def cmd_observatory(args: argparse.Namespace) -> int:
         label = "attribution 교정" if args.refresh else "세션 스냅샷"
         print(f"observatory: +{n} {label} (발견 창 {args.window}일, 중복 제외)"
               + (f" · core-integrity transition +{ni}" if ni else ""))
+        try:  # substrate-health 측정도 편승(성장 추적 baseline 전진) — 실패해도 sync는 성공
+            from organum import health as _h
+            hrep = _h.measure(state_dir, persist=True)
+            if hrep["findings"]:
+                print(f"⚠ substrate-health {len(hrep['findings'])}건 — "
+                      "'organum observatory health'로 확인")
+        except OSError as e:
+            print(f"substrate-health 측정 불가: {e}", file=sys.stderr)
+        return 0
+    if args.obs_cmd == "ingest":  # organum-code observation/v1 reported 레코드 (ACP 불투명 백엔드)
+        _writable_meta(state_dir)          # 쓰기 게이트 (sync와 동일)
+        n_new = n_dup = 0
+        for fpath in args.files:
+            p = Path(fpath).expanduser()
+            def _no_const(c):  # A2.1: NaN/Infinity는 JSON 표준 밖 — parse 단계 명시 거부
+                raise ValueError(f"nonstandard JSON constant {c!r}")
+            try:
+                if p.stat().st_size > 4 * 1024 * 1024:  # H2: parse 전 보수적 byte cap
+                    print(f"ingest 거부 {p.name}: 4MiB 초과 (bounded ingest)", file=sys.stderr)
+                    return 1
+                rec = json.loads(p.read_text(encoding="utf-8"), parse_constant=_no_const)
+            except (OSError, ValueError) as e:   # ValueError ⊃ JSONDecodeError·nonstandard const
+                print(f"ingest 실패 {p.name}: 읽기/JSON 오류 ({e})", file=sys.stderr)
+                return 1
+            try:
+                res = _obs.ingest_report(state_dir, rec)
+            except _obs.IngestConflict as e:
+                print(f"ingest CONFLICT {p.name}: {e}", file=sys.stderr)
+                return 1
+            except ValueError as e:
+                print(f"ingest 거부 {p.name}: {e}", file=sys.stderr)
+                return 1
+            if res == "ingested":
+                n_new += 1
+            else:
+                n_dup += 1
+        if args.json:
+            print(json.dumps({"ingested": n_new, "duplicate": n_dup}, ensure_ascii=False))
+        else:
+            print(f"observatory: +{n_new} reported 관측"
+                  + (f" · {n_dup} 중복(멱등 skip)" if n_dup else ""))
+        return 0
+    if args.obs_cmd == "health":  # substrate-health — 면역 감지 tier (탐지→사람 게이트 경보)
+        from organum import health as _h
+        if args.assert_path:
+            from organum.alarm import AlarmError
+            try:
+                res = _h.assert_finding(state_dir.parent, state_dir, args.assert_path,
+                                        frm=args.frm, level=args.level, to=args.to,
+                                        note=args.note or "")
+            except (_h.HealthError, AlarmError) as e:
+                print(f"health assert 거부: {e}", file=sys.stderr)
+                return 1
+            print(f"health: 경보 발동({args.level}) — {res['alarm']}")
+            if res["letter"]:
+                print(f"  통지 편지 → {res['target']} ({res['letter']}, escalate)")
+            else:
+                print("  통지 대상 셀 미상 — passive declared 조인 없음 (--to <cell>로 지정 가능)")
+            return 0
+        _writable_meta(state_dir)          # 측정 영속(성장 추적 전진) — 쓰기 게이트
+        rep = _h.measure(state_dir, persist=True)
+        if args.json:
+            print(json.dumps(rep, ensure_ascii=False))
+        else:
+            print(_h.render(rep))
+        return 1 if any(f["severity"] == "alert" for f in rep["findings"]) else 0
+    if args.obs_cmd == "correlate":  # H1 링크 — 읽기 시점 계산·무기록 (쓰기 게이트 불요)
+        links = _obs.correlate(state_dir, since_days=args.days)
+        if args.json:
+            print(json.dumps({"links": links}, ensure_ascii=False))
+            return 0
+        print(_obs.render_correlation(links, args.days))
         return 0
     if args.obs_cmd == "integrity":  # core-integrity 시간축 감시 뷰 (memory-surveillance)
         _writable_meta(state_dir)          # 조회 전 갱신 = 쓰기 → 게이트 (B4)
@@ -498,7 +589,16 @@ def cmd_observatory(args: argparse.Namespace) -> int:
             return 0
         print(_obs.report(state_dir, state_dir.parent, days=args.days))
         return 0
-    recs = _obs.load(state_dir, since_days=args.days)
+    # stats — source 분리(계약 6: passive/reported는 별도 evidence, 자동 merge 금지)
+    if getattr(args, "source", "passive") == "reported":
+        recs = _obs.load_reported(state_dir, since_days=args.days)
+        print("[reported — organum-code 보고 관측 · passive와 별도 evidence(이중계산 방지)]")
+        conf = _obs.reported_conflicts(state_dir)
+        if conf:  # A3: 격리는 조용히 하지 않는다
+            print(f"⚠ {len(conf)}개 run 격리(payload conflict) — 통계에서 제외: "
+                  + ", ".join(c[:20] + "…" for c in conf[:3]))
+    else:
+        recs = _obs.load(state_dir, since_days=args.days)
     print(_obs.render_stats(_obs.stats(recs, by=args.by), args.days, by=args.by))
     return 0
 
@@ -945,6 +1045,17 @@ def cmd_alarm(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bench(args: argparse.Namespace) -> int:
+    from organum import bench as _bench
+    state_dir = _require_state()
+    rep = _bench.report(state_dir, since_days=args.days)
+    if args.json:
+        print(json.dumps(rep, ensure_ascii=False))
+        return 0
+    print(_bench.render(rep, peer=args.peer))
+    return 0
+
+
 def cmd_session(args: argparse.Namespace) -> int:
     from organum import session as session_mod
 
@@ -1259,6 +1370,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_insp2.add_argument("--html", metavar="FILE", help="자립형 HTML 리포트로 저장")
     p_insp2.set_defaults(func=cmd_inspector)
 
+    p_bench = sub.add_parser("bench", help="협업벤치 — 피어저널 수확·집계 (read-only · verbatim+provenance, 축 코딩 없음)")
+    bench_sub = p_bench.add_subparsers(dest="bench_cmd", required=True)
+    pb_peers = bench_sub.add_parser("peers", help="사이트 피어저널 피어별 집계 — 여러 세션·평가자의 관측을 한 화면에")
+    pb_peers.add_argument("--peer", default=None, help="한 피어 상세 (verbatim strengths/frictions/role_fit + provenance)")
+    pb_peers.add_argument("--days", type=float, default=None, help="ended_at 창(일, 기본 전체)")
+    pb_peers.add_argument("--json", action="store_true", help="기계용 JSON {entries_n,peers,wpa,wpa_saturated}")
+    p_bench.set_defaults(func=cmd_bench)
+
     p_obs = sub.add_parser("observatory", help="관측 영속화 — 세션 소비 스냅샷 축적(월 샤드)·통계 (transcript ~30일 시한부 대비)")
     obs_sub = p_obs.add_subparsers(dest="obs_cmd", required=True)
     po_sync = obs_sub.add_parser("sync", help="발견 가능한 세션 전부 스윕 → 신규/전진분만 기록 (멱등)")
@@ -1268,10 +1387,34 @@ def build_parser() -> argparse.ArgumentParser:
     po_sync.add_argument("--refresh", action="store_true",
                          help="이미 기록된 세션의 attribution 재계산·교정 — 같은 last_ts라도 "
                               "(어댑터 파생·declared-join 개선·뒤늦은 선언 세션 반영, 실변경 시만·멱등)")
+    po_ing = obs_sub.add_parser("ingest", help="organum-code observation/v1 레코드 ingest — "
+                                "ACP 불투명 백엔드(grok-build·claude-code·deepcode…)의 보고 관측")
+    po_ing.add_argument("files", nargs="+", help="observation/v1 JSON 파일(들)")
+    po_ing.add_argument("--json", action="store_true", help="결과를 JSON으로")
     po_stats = obs_sub.add_parser("stats", help="축적된 스냅샷 집계 — 세션·토큰·비용 근사·모델 믹스")
     po_stats.add_argument("--days", type=float, default=30, help="집계 기간(일, 기본 30)")
-    po_stats.add_argument("--by", choices=["model", "role", "origin", "vendor"], default=None,
-                          help="그룹 축 (모델/역할/기원/벤더)")
+    po_stats.add_argument("--by", choices=["model", "role", "origin", "vendor", "backend"], default=None,
+                          help="그룹 축 (모델/역할/기원/벤더/백엔드[reported 하네스 축])")
+    po_stats.add_argument("--source", choices=["passive", "reported"], default="passive",
+                          help="증거 소스 — passive(어댑터 직접 관측, 기본) vs reported"
+                               "(organum-code 보고). 별도 evidence라 합산 안 함")
+    po_h = obs_sub.add_parser("health", help="substrate-health — 벤더 store 이상 성장·디스크 감시 "
+                              "(면역 감지 tier · read-only 관측 · alert 있으면 exit 1)")
+    po_h.add_argument("--json", action="store_true", help="기계용 JSON {ts,findings,totals,disk_free_gb}")
+    po_h.add_argument("--assert", dest="assert_path", metavar="PATH", default=None,
+                      help="케어테이커 확정: 활성 finding 경로 → 우선순위 경보(alarm)+문제 셀 지향 "
+                           "escalate 통지 (human/chief만 — 탐지→경보의 사람 게이트)")
+    po_h.add_argument("--frm", default="human", help="assert 발동자 (기본 human · chief 셀 id)")
+    po_h.add_argument("--to", default=None,
+                      help="통지 대상 셀 id (생략 시 passive declared 조인으로 자동 식별 시도)")
+    po_h.add_argument("--level", choices=["notice", "pause"], default="notice",
+                      help="경보 수준 — pause=정지 권고(규율, 강제 아님)")
+    po_h.add_argument("--note", default=None, help="케어테이커 메모 (evidence에 병기)")
+    po_corr = obs_sub.add_parser("correlate", help="H1 correlation 링크 — reported run ↔ passive 세션 "
+                                 "(exact backend·nativeSessionId만, 읽기 시점·무병합)")
+    po_corr.add_argument("--days", type=float, default=30,
+                         help="reported 창(일, 기본 30 — passive 대응은 창 무관 탐색)")
+    po_corr.add_argument("--json", action="store_true", help="기계용 JSON [{run_id,link_status,reported,passive}]")
     po_rep = obs_sub.add_parser("report", help="작업 모니터 리포트 — 지금(live)/오늘/역사를 분리된 밴드로")
     po_rep.add_argument("--days", type=float, default=30, help="역사 창(일, 기본 30)")
     po_rep.add_argument("--html", metavar="FILE", help="자립형 HTML 리포트로 저장 (지금/역사 밴드)")

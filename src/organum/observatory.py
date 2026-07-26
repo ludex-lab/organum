@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import contextlib as _contextlib
 import datetime
 import json
 from pathlib import Path
@@ -560,4 +561,416 @@ def render_stats(s: dict, days: float, by: str | None = None) -> str:
             cost = f" · ${gs['cost_usd']:.2f}" if gs.get("cost_usd") is not None else ""
             lines.append(f"    {g:<{w}}  {gs['sessions']:>4}세션 · in {_fmt_tok(gs['in_tok'])}"
                          f" · out {_fmt_tok(gs['out_tok'])} · cache {_fmt_tok(gs['cache'])}{cost}")
+    return "\n".join(lines)
+
+
+# ── reported ingestion (organum-code observation/v1) ─────────────────────────
+# ACP-라우팅 백엔드(grok-build·claude-code·deepcode …)의 세션은 supervisor-owned actor scope에
+# 저장돼 organum의 수동 어댑터 관측에 불투명하다. per-backend 어댑터 포팅은 treadmill(OpenCode
+# 하나 하드코딩했더니 보안 사유로 드롭됨) — 대신 organum-code supervisor가 emit하는 정규화
+# observation/v1 레코드를 ingest한다. 계약: docs/observation-ingestion-contract-response.md
+# (organum-code, Zod가 정본 — 여기 검증은 fail-closed 방어이지 스키마 재구현이 아님).
+#
+# 의미론 (organum-code 판정 요청 6건 그대로):
+#  1. backend.id는 open — 문법 유효(비어있지 않은 소문자 슬러그)면 미지 백엔드도 수용.
+#  2. backend는 vendor/model과 별개 1급 축 (provider≠harness 분리 = harness-lift 전제).
+#  3. nullable identity·실패 run도 정상 observation (성공 행만 세면 정직하지 않다).
+#  4. usage null 보존 — 미측정을 0으로 바꾸지 않는다 (C2).
+#  5. (reported, run.id) 멱등 — 같은 payload 재전송=no-op, 다른 payload=conflict fail-closed.
+#  6. passive/reported는 별도 evidence — exact nativeSessionId 일치 전까지 merge 금지.
+OBS_V1_SCHEMA = "organum-code/observation/v1"
+_REPORTED_GLOB = "reported-[0-9][0-9][0-9][0-9]-[0-9][0-9].jsonl"
+
+
+class IngestConflict(ValueError):
+    """같은 run.id에 다른 payload — silent overwrite 대신 fail-closed (계약 5)."""
+
+
+def _obs_get(record: dict, *path):
+    cur = record
+    for k in path:
+        if not isinstance(cur, dict):
+            return None
+        cur = cur.get(k)
+    return cur
+
+
+def _parse_ts(value):
+    """검증된 UTC `Z` RFC3339 문자열 → aware datetime, 아니면 None (critic A1).
+    구조 검증(스키마 pattern이 Z-only 강제)을 통과한 값만 와야 하지만, 여기서도 Z-종결·UTC를
+    이중 확인한다 — parse 실패/offset은 None(호출자가 fail-closed)."""
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.utcoffset() != datetime.timedelta(0):
+        return None
+    return dt
+
+
+def validate_observation(record: dict) -> list[str]:
+    """observation/v1 검증 — 위반 사유 목록 반환(빈 목록=통과). 2층(critic A2):
+
+    ① **구조 = vendored portable schema 해석**(obs_schema — producer Zod에서 자동 생성된
+      projection이 문법의 단일 정본; consumer 손-포팅 문법은 반드시 발산해서 폐지).
+      required/type/enum/pattern/bounds/strict를 여기서 전부 강제.
+    ② **cross-field = manual invariant**(projection에 없는 superRefine 등가) + **timestamp
+      parse·ordering**(critic A1: `startedAt ≤ finishedAt ≤ recordedAt`, UTC `Z`만)."""
+    if not isinstance(record, dict):
+        return ["record가 object가 아님"]
+    if record.get("schema") != OBS_V1_SCHEMA:
+        return [f"schema != {OBS_V1_SCHEMA}"]      # 스키마 불일치면 이후 검증 무의미
+    from organum import obs_schema
+    errs = obs_schema.validate(record, obs_schema.load_observation_schema())
+    if errs:
+        return errs                                 # 구조가 깨졌으면 cross-field 무의미
+    # ── cross-field invariants (superRefine 등가 — 구조 통과 후) ──
+    # timestamp: 구조 검증이 UTC Z pattern을 이미 강제 — 여기서 parse해 ordering 확인 (A1)
+    started = _parse_ts(_obs_get(record, "run", "startedAt"))
+    finished = _parse_ts(_obs_get(record, "run", "finishedAt"))
+    recorded = _parse_ts(_obs_get(record, "run", "recordedAt"))
+    if recorded is None:
+        errs.append("run.recordedAt이 UTC Z datetime으로 parse 불가")
+    if _obs_get(record, "run", "startedAt") is not None and started is None:
+        errs.append("run.startedAt parse 불가")
+    if _obs_get(record, "run", "finishedAt") is not None and finished is None:
+        errs.append("run.finishedAt parse 불가")
+    if started and finished and started > finished:
+        errs.append("startedAt > finishedAt (ordering 위반)")
+    if finished and recorded and finished > recorded:
+        errs.append("finishedAt > recordedAt (ordering 위반)")
+    if started and recorded and started > recorded:
+        errs.append("startedAt > recordedAt (ordering 위반)")
+    if _obs_get(record, "run", "timingCompleteness") == "complete":
+        if not (started and finished):
+            errs.append("timingCompleteness=complete인데 start/finish 불완전")
+    # identity
+    cell = _obs_get(record, "identity", "canonicalCell")
+    js = _obs_get(record, "identity", "joinStatus")
+    if js == "joined" and not cell:
+        errs.append("joinStatus=joined인데 canonicalCell 없음")
+    if js == "not-joined" and cell is not None:
+        errs.append("joinStatus=not-joined인데 canonicalCell 존재")
+    persona = _obs_get(record, "identity", "persona")
+    workspace = _obs_get(record, "identity", "workspace")
+    if (persona is None) != (workspace is None):
+        errs.append("persona/workspace는 함께 있거나 함께 null")
+    # coordination (receipt basename 문법은 스키마 pattern이 강제 — "."·".."·구분자·NUL 거부)
+    contrib = _obs_get(record, "coordination", "contributions")
+    if isinstance(contrib, int) and contrib > 0:
+        if not cell:
+            errs.append("contribution>0인데 canonicalCell 없음")
+        if not _obs_get(record, "coordination", "receipt", "file"):
+            errs.append("contribution>0인데 receipt 없음")
+    # outcome
+    if (_obs_get(record, "outcome", "gate") == "pass"
+            and _obs_get(record, "run", "status") != "passed"):
+        errs.append("gate=pass인데 run.status != passed")
+    if isinstance(contrib, int) and contrib == 0 and _obs_get(record, "coordination", "receipt") is not None:
+        errs.append("contributions=0인데 receipt 존재 (null이어야)")
+    # usage 관계 (전부 non-null일 때만 — null 보존이 우선)
+    u = record.get("usage") or {}
+    it, ot, tt = u.get("inputTokens"), u.get("outputTokens"), u.get("totalTokens")
+    if it is not None and ot is not None and tt is not None and it + ot != tt:
+        errs.append("totalTokens != inputTokens + outputTokens")
+    if it is not None and u.get("cachedInputTokens") is not None and u["cachedInputTokens"] > it:
+        errs.append("cachedInputTokens > inputTokens")
+    if ot is not None and u.get("reasoningTokens") is not None and u["reasoningTokens"] > ot:
+        errs.append("reasoningTokens > outputTokens")
+    # usage completeness ↔ counter 정합 (critic A2.1 — producer superRefine 등가):
+    # 라벨과 측정값이 서로 모순이면 "미측정을 0으로 안 쓴다" 규율 자체가 무너진다.
+    comp = u.get("completeness")
+    counters = ("responses", "inputTokens", "outputTokens", "cachedInputTokens",
+                "totalTokens", "reasoningTokens")
+    if comp == "unavailable":
+        if u.get("source") != "unavailable":
+            errs.append("completeness=unavailable인데 source가 unavailable 아님")
+        for k in ("requests", "costUsd", *counters):
+            if u.get(k) is not None:
+                errs.append(f"completeness=unavailable인데 usage.{k} non-null")
+    elif comp in ("complete", "lower-bound"):
+        if u.get("source") == "unavailable":
+            errs.append(f"completeness={comp}인데 source=unavailable")
+        for k in counters:
+            if u.get(k) is None:
+                errs.append(f"completeness={comp}인데 usage.{k} null")
+    if comp == "complete" and u.get("requests") is None:
+        errs.append("completeness=complete인데 requests null")
+    if (u.get("requests") is not None and u.get("responses") is not None
+            and u["responses"] > u["requests"]):
+        errs.append("responses > requests")
+    if _obs_get(record, "provenance", "observationSource") != "reported":
+        errs.append("provenance.observationSource != reported")
+    return errs
+
+
+def _payload_fp(record: dict) -> str:
+    import hashlib
+    return hashlib.sha256(
+        json.dumps(record, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _anchor_dt(record: dict):
+    """샤드/시간 필터 앵커 datetime: finishedAt > startedAt > recordedAt. **parse된 신뢰값만**
+    반환(critic A1: raw 문자열이 경로에 못 들어감 — shard basename은 여기서 strftime으로만)."""
+    for k in ("finishedAt", "startedAt", "recordedAt"):
+        dt = _parse_ts(_obs_get(record, "run", k))
+        if dt is not None:
+            return dt
+    return None
+
+
+@_contextlib.contextmanager
+def _reported_lock(state_dir: Path):
+    """cross-process critical section (critic A3) — index check+append를 한 락 안에.
+    fcntl(macOS/Linux) 우선, msvcrt(Windows) 폴백. 락 파일은 관측 데이터가 아니라 조율 장치."""
+    d = _dir(state_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    fh = open(d / "reported.lock", "a+", encoding="utf-8")
+    locked = None
+    try:
+        try:
+            import fcntl
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            locked = "fcntl"
+        except ImportError:
+            import msvcrt
+            fh.seek(0)
+            msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+            locked = "msvcrt"
+        yield
+    finally:
+        try:
+            if locked == "fcntl":
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+            elif locked == "msvcrt":
+                import msvcrt
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+        finally:
+            fh.close()
+
+
+def _reported_index(state_dir: Path) -> dict:
+    """전체 reported 샤드에서 run_id → payload_fp (멱등/conflict의 진실 소스)."""
+    idx: dict = {}
+    d = _dir(state_dir)
+    if not d.is_dir():
+        return idx
+    for p in sorted(d.glob(_REPORTED_GLOB)):
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        r = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    if r.get("run_id"):
+                        idx[r["run_id"]] = r.get("payload_fp") or ""
+        except OSError:
+            continue
+    return idx
+
+
+def ingest_report(state_dir: Path, record: dict) -> str:
+    """observation/v1 레코드 하나를 reported 샤드에 upsert. 반환: 'ingested'|'duplicate'.
+    검증 실패=ValueError(사유 병기), 같은 run.id 다른 payload=IngestConflict. 원본 레코드
+    전체를 보존한다(raw evidence 보존 — 평탄화는 load_reported가 읽기 시점에)."""
+    errs = validate_observation(record)
+    if errs:
+        raise ValueError("observation/v1 검증 실패: " + " · ".join(errs[:5]))
+    rid = record["run"]["id"]
+    fp = _payload_fp(record)
+    anchor = _anchor_dt(record)
+    if anchor is None:                             # 검증 통과면 불가능하지만 이중 방어 (A1)
+        raise ValueError("anchor timestamp parse 실패")
+    from organum.state import utc_now_iso
+    with _reported_lock(state_dir):                # index check+append 원자화 (A3)
+        existing = _reported_index(state_dir)
+        if rid in existing:
+            if existing[rid] == fp:
+                return "duplicate"                 # 멱등 재전송 (계약 5)
+            raise IngestConflict(f"run.id {rid[:20]}…에 다른 payload — 거부(fail-closed)")
+        # shard basename은 parse된 datetime의 strftime에서만 (A1 — raw 문자열 경로 금지)
+        shard = _dir(state_dir) / f"reported-{anchor.strftime('%Y-%m')}.jsonl"
+        row = {"v": 1, "run_id": rid, "payload_fp": fp, "ingested_at": utc_now_iso(),
+               "record": record}
+        with open(shard, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    return "ingested"
+
+
+def _reported_rows_and_conflicts(state_dir: Path) -> tuple[dict, set]:
+    """reported 샤드 원시 스캔 → (run_id→row, conflict run_id 집합). 같은 run_id에 서로 다른
+    payload_fp가 공존하면 conflict — **LWW로 하나를 고르지 않는다**(critic A3: 약속된
+    conflict fail-closed가 silent overwrite로 바뀌는 것 방지, 격리)."""
+    latest: dict = {}
+    fps: dict = {}
+    conflicts: set = set()
+    d = _dir(state_dir)
+    if not d.is_dir():
+        return {}, set()
+    for p in sorted(d.glob(_REPORTED_GLOB)):
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    try:
+                        row = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    rid = row.get("run_id")
+                    if not rid or not isinstance(row.get("record"), dict):
+                        continue
+                    fp = row.get("payload_fp") or ""
+                    if rid in fps and fps[rid] != fp:
+                        conflicts.add(rid)         # 같은 run·다른 payload → 격리 (A3)
+                    fps[rid] = fp
+                    prev = latest.get(rid)
+                    if prev is None or (row.get("ingested_at") or "") >= (prev.get("ingested_at") or ""):
+                        latest[rid] = row
+        except OSError:
+            continue
+    return latest, conflicts
+
+
+def reported_conflicts(state_dir: Path) -> list[str]:
+    """격리된 conflict run_id 목록 — CLI가 표면화(조용한 누락 방지)."""
+    return sorted(_reported_rows_and_conflicts(state_dir)[1])
+
+
+def load_reported(state_dir: Path, since_days: float | None = None) -> list:
+    """reported 샤드 → stats 호환 평탄 행. null 보존(C2). conflict run은 **격리·제외**(A3 —
+    reported_conflicts로 표면화). 행 필드: 기존 stats 축 + backend(1급, vendor와 별개) + source."""
+    latest, conflicts = _reported_rows_and_conflicts(state_dir)
+    out = []
+    for rid, row in latest.items():
+        if rid in conflicts:
+            continue                               # 격리 — LWW 금지 (A3)
+        r = row["record"]
+        g = lambda *p: _obs_get(r, *p)  # noqa: E731
+        u = r.get("usage") or {}
+        out.append({
+            "source": "reported", "run_id": row["run_id"], "ingested_at": row.get("ingested_at"),
+            # 축: backend=하네스(1급), model/provider=brain — conflate 금지(harness-lift 전제)
+            "backend": g("backend", "id"), "backend_version": g("backend", "version"),
+            "protocol": g("backend", "protocol"), "native_session_id": g("backend", "nativeSessionId"),
+            "model": g("brain", "model"), "provider": g("brain", "provider"),
+            # identity — nullable 그대로
+            "id": g("identity", "canonicalCell"),
+            "declared": g("identity", "canonicalCell") if g("identity", "joinStatus") == "joined" else None,
+            "join_status": g("identity", "joinStatus"), "role": g("identity", "role"),
+            "persona": g("identity", "persona"), "workspace": g("identity", "workspace"),
+            # usage — null 보존(C2), completeness 라벨 유지
+            "in_tok": u.get("inputTokens"), "out_tok": u.get("outputTokens"),
+            "cache": u.get("cachedInputTokens"), "reasoning_tok": u.get("reasoningTokens"),
+            "total_tok": u.get("totalTokens"), "usage_completeness": u.get("completeness"),
+            "requests": u.get("requests"), "responses": u.get("responses"),
+            "cost_usd_reported": u.get("costUsd"),
+            # outcome/coordination (bench 소재)
+            "contributions": g("coordination", "contributions"), "topic": g("coordination", "topic"),
+            "publication_phase": g("coordination", "publicationPhase"),
+            "session_closed": g("coordination", "sessionClosed"),
+            "gate": g("outcome", "gate"), "run_status": g("run", "status"),
+            "causal_claim": g("outcome", "causalClaim"), "checks": g("outcome", "checks"),
+            # 시간·계보 — parse된 신뢰값을 canonical UTC Z로 정규화(혼합 정밀도의 문자열
+            # 비교 함정 방지; raw는 record에 보존)
+            "first_ts": (lambda dt: dt.strftime("%Y-%m-%dT%H:%M:%SZ") if dt else None)(
+                _parse_ts(g("run", "startedAt"))),
+            "last_ts": (lambda dt: dt.strftime("%Y-%m-%dT%H:%M:%SZ") if dt else None)(
+                _anchor_dt(r)),
+            "timing": g("run", "timingCompleteness"),
+            "eval": g("evaluation", "name"), "scenario": g("evaluation", "scenario"),
+            "preregistration_id": g("run", "preregistrationId"),
+            "prior_failure": g("provenance", "source", "priorFailure"),
+            "origin": "reported",  # passive origin(terminal/subagent)과 구분되는 라벨
+        })
+    recs = sorted(out, key=lambda r: r.get("last_ts") or "")
+    if since_days is not None:
+        cutoff = (datetime.datetime.now(datetime.timezone.utc)
+                  - datetime.timedelta(days=since_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        recs = [r for r in recs if (r.get("last_ts") or "") >= cutoff]
+    return recs
+
+
+# ── correlation link (H1 pair — reported ↔ passive 교차검증) ─────────────────
+# 계약(관측 ingest 6·emitter SHIPPED 합의): passive/reported는 별도 evidence이고,
+# exact `(backend.id, backend.nativeSessionId)` pair가 passive 관측의 네이티브 store
+# session id와 정확히 일치할 때만 링크한다. 추측 매칭(timestamp/cell/workspace 근접)
+# 없음. 링크는 **읽기 시점 계산**(무기록) — 양 소스 원본은 그대로 두고 나란히 놓기만
+# 한다(교차검증 표면이지 병합·판결 아님; usage 의미도 다르다: broker 계측 vs
+# transcript 파생).
+#
+# backend → passive vendor 매핑 = "그 백엔드가 어느 네이티브 store에 쓰는가"라는
+# correlation 전용 지식. ingest의 open backend 축(계약 1)과 무관 — 미지 백엔드도
+# ingest는 되고, correlation만 no-mapping으로 정직하게 표면화된다.
+_BACKEND_NATIVE_VENDOR = {"claude-code": "claude", "grok-build": "grok"}
+
+_CORR_REPORTED_KEYS = ("model", "provider", "id", "role", "join_status", "run_status",
+                       "gate", "in_tok", "out_tok", "cache", "total_tok", "requests",
+                       "usage_completeness", "first_ts", "last_ts")
+_CORR_PASSIVE_KEYS = ("id", "model", "origin", "declared", "role", "join_status",
+                      "in_tok", "out_tok", "cache", "first_ts", "last_ts")
+
+
+def correlate(state_dir: Path, since_days: float | None = None) -> list:
+    """reported run ↔ passive 세션 H1 링크. reported run마다 한 행, link_status =
+
+    - linked: exact pair 일치하는 passive 관측 존재 (양 소스 나란히)
+    - no-passive: 매핑은 알지만 passive 관측 없음 — actor-scope 불투명·transcript
+      청소 둘 다 정상 사유(오류 아님)
+    - no-mapping: 미지 백엔드 — ingest는 유효, 네이티브 store 지식만 없음
+    - no-native-id: 백엔드가 stable session 계약 없음(nativeSessionId null, deepcode 등)
+
+    since_days는 **reported 창만** 필터 — passive 대응은 창 무관 탐색(오래 settle된
+    passive 스냅샷이 창 밖이라 링크를 놓치면 거짓 no-passive가 된다)."""
+    reported = load_reported(state_dir, since_days=since_days)
+    passive = {(r.get("vendor"), r.get("session_id")): r for r in load(state_dir)}
+    out = []
+    for r in reported:
+        nsid = r.get("native_session_id")
+        vendor = _BACKEND_NATIVE_VENDOR.get(r.get("backend"))
+        p = None
+        if nsid is None:
+            status = "no-native-id"
+        elif vendor is None:
+            status = "no-mapping"
+        else:
+            p = passive.get((vendor, nsid))
+            status = "linked" if p else "no-passive"
+        out.append({
+            "run_id": r["run_id"], "backend": r.get("backend"),
+            "native_session_id": nsid, "link_status": status,
+            "reported": {k: r.get(k) for k in _CORR_REPORTED_KEYS},
+            "passive": ({k: p.get(k) for k in _CORR_PASSIVE_KEYS} if p else None),
+        })
+    return out
+
+
+def render_correlation(links: list, days: float) -> str:
+    """correlation 뷰 — 상태별 요약 + linked는 양 소스 나란히(병합 없음)."""
+    n = {s: sum(1 for l in links if l["link_status"] == s)
+         for s in ("linked", "no-passive", "no-mapping", "no-native-id")}
+    lines = [f"correlation — 최근 {days:g}일 reported {len(links)} run"
+             f" · linked {n['linked']} · no-passive {n['no-passive']}"
+             f" · no-mapping {n['no-mapping']} · no-native-id {n['no-native-id']}"]
+    if not links:
+        lines.append("  (reported 관측 없음 — organum observatory ingest 로 시작)")
+        return "\n".join(lines)
+    for l in links:
+        if l["link_status"] != "linked":
+            continue
+        r, p = l["reported"], l["passive"]
+        lines.append(f"  {l['run_id'][:20]}…  {l['backend']} · {l['native_session_id']}")
+        comp = f" ({r['usage_completeness']})" if r.get("usage_completeness") else ""
+        lines.append(f"    reported: {r.get('model') or '—'} · in {_fmt_tok(r.get('in_tok'))}"
+                     f" · out {_fmt_tok(r.get('out_tok'))} · cache {_fmt_tok(r.get('cache'))}{comp}"
+                     f" · role {r.get('role') or '—'}")
+        lines.append(f"    passive : {p.get('model') or '—'} · in {_fmt_tok(p.get('in_tok'))}"
+                     f" · out {_fmt_tok(p.get('out_tok'))} · cache {_fmt_tok(p.get('cache'))}"
+                     f" · {p.get('origin') or '—'} · role {p.get('role') or '—'}")
+    lines.append("  (usage 의미 상이: reported=broker 계측 · passive=transcript 파생 — 병합·판결 없음)")
     return "\n".join(lines)

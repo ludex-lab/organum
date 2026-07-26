@@ -588,3 +588,445 @@ class TestReport(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def _obs_v1(**over):
+    """observation/v1 최소 유효 레코드 (organum-code golden 형상)."""
+    rec = {
+        "schema": "organum-code/observation/v1",
+        "run": {"id": "ocobs-" + "a" * 64, "attempt": 1, "status": "passed",
+                "startedAt": None, "finishedAt": None,
+                "recordedAt": "2026-07-24T15:47:23.000Z",
+                "timingCompleteness": "partial", "comparisonKey": None,
+                "preregistrationId": None},
+        "identity": {"canonicalCell": "grok-0006267341951b9cecf0c78301310935d1d",
+                     "joinStatus": "joined", "role": "critic",
+                     "persona": None, "workspace": None},
+        "backend": {"id": "grok-build", "version": "0.2.111", "protocol": "acp",
+                    "nativeSessionId": None},
+        "brain": {"provider": "upstage", "model": "solar-open2",
+                  "protocol": "openai-chat-completions",
+                  "reasoning": {"enabled": False, "effort": None}},
+        "usage": {"semantics": "organum-code/provider-usage/v1", "source": "inference-broker",
+                  "completeness": "lower-bound", "requests": None, "responses": 14,
+                  "inputTokens": 259215, "outputTokens": 2032, "cachedInputTokens": 218688,
+                  "totalTokens": 261247, "reasoningTokens": 0, "costUsd": None},
+        "coordination": {"contributions": 1, "topic": "critic-review",
+                         "publicationPhase": "shipped", "sessionClosed": True,
+                         "receipt": {"file": "20260724-x-to-field.md", "bodyBytes": 1,
+                                      "bodySha256": "0" * 64}},
+        "discipline": {"commands": [], "declaredExecutions": 1,
+                       "additionalReadOnlyCommands": 0, "strictSingleExecute": True,
+                       "executionBudgetPhase": "conservation", "checkpointActuations": 0,
+                       "conservationActuations": 0, "worktreeClean": True},
+        "outcome": {"gate": "pass", "classification": "x", "causalClaim": "observational",
+                    "checks": {"ok": True}},
+        "provenance": {"observationSource": "reported",
+                       "producer": {"name": "organum-code", "version": "0", "commit": None},
+                       "source": {"schema": "s/v1", "digest": "0" * 64,
+                                   "repositoryCommit": None, "priorFailure": None}},
+        "evaluation": {"name": "e", "scenario": None},
+    }
+    for k, v in over.items():
+        parts = k.split("__")
+        cur = rec
+        for p in parts[:-1]:
+            cur = cur[p]
+        cur[parts[-1]] = v
+    return rec
+
+
+class TestReportedIngestion(unittest.TestCase):
+    """organum-code observation/v1 ingest — 계약 판정 6건 + invariant fail-closed."""
+
+    def test_ingest_and_load_flat_row(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            self.assertEqual(observatory.ingest_report(sd, _obs_v1()), "ingested")
+            rows = observatory.load_reported(sd)
+            self.assertEqual(len(rows), 1)
+            r = rows[0]
+            self.assertEqual(r["backend"], "grok-build")     # 판정 2: backend 별도 축
+            self.assertEqual(r["model"], "solar-open2")
+            self.assertEqual(r["provider"], "upstage")       # provider ≠ backend
+            self.assertEqual(r["declared"], r["id"])         # joined → declared
+            self.assertIsNone(r["requests"])                 # 판정 4: null 보존
+            self.assertEqual(r["usage_completeness"], "lower-bound")
+
+    def test_unknown_valid_backend_accepted(self):
+        # 판정 1: 미지 백엔드도 문법 유효하면 수용 (closed enum 아님)
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            rec = _obs_v1(backend__id="future-tui-2027")
+            self.assertEqual(observatory.ingest_report(sd, rec), "ingested")
+
+    def test_invalid_backend_grammar_rejected(self):
+        for bad in ("", "UPPER", "has space", "a" * 65, None):
+            rec = _obs_v1(backend__id=bad)
+            self.assertTrue(observatory.validate_observation(rec), f"통과되면 안 됨: {bad!r}")
+
+    def test_failed_and_notjoined_run_ingested(self):
+        # 판정 3: 실패 run·nullable identity도 정상 observation
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            rec = _obs_v1(run__id="ocobs-" + "b" * 64, run__status="failed",
+                          identity__canonicalCell=None, identity__joinStatus="not-joined",
+                          identity__role=None)
+            rec["coordination"]["contributions"] = 0
+            rec["coordination"]["receipt"] = None      # contributions=0 → receipt null (A2.1)
+            rec["outcome"]["gate"] = "fail"
+            self.assertEqual(observatory.ingest_report(sd, rec), "ingested")
+            r = observatory.load_reported(sd)[0]
+            self.assertIsNone(r["id"])
+            self.assertIsNone(r["declared"])
+            self.assertEqual(r["run_status"], "failed")
+
+    def test_idempotent_replay_and_conflict(self):
+        # 판정 5: 같은 payload 재전송=duplicate, 다른 payload=conflict fail-closed
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            self.assertEqual(observatory.ingest_report(sd, _obs_v1()), "ingested")
+            self.assertEqual(observatory.ingest_report(sd, _obs_v1()), "duplicate")
+            mutated = _obs_v1(usage__outputTokens=9999, usage__totalTokens=259215 + 9999)
+            with self.assertRaises(observatory.IngestConflict):
+                observatory.ingest_report(sd, mutated)
+            self.assertEqual(len(observatory.load_reported(sd)), 1)
+
+    def test_passive_and_reported_separate(self):
+        # 판정 6: passive 로더가 reported 샤드 안 읽고, reported 로더가 passive 안 읽음
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            observatory.record(sd, [_c(sid="passive-1")], "sync")
+            observatory.ingest_report(sd, _obs_v1())
+            self.assertEqual(len(observatory.load(sd)), 1)
+            self.assertEqual(observatory.load(sd)[0]["session_id"], "passive-1")
+            self.assertEqual(len(observatory.load_reported(sd)), 1)
+            self.assertEqual(observatory.load_reported(sd)[0]["source"], "reported")
+
+    def test_invariants_fail_closed(self):
+        cases = [
+            _obs_v1(schema="organum-code/observation/v2"),               # 미지 스키마
+            _obs_v1(identity__canonicalCell=None),                        # joined인데 cell 없음
+            _obs_v1(identity__persona="p"),                               # persona만(workspace 없이)
+            _obs_v1(run__status="failed"),                                # gate=pass인데 status!=passed
+            _obs_v1(usage__totalTokens=1),                                # total != in+out
+            _obs_v1(usage__cachedInputTokens=999999999),                  # cached > input
+            _obs_v1(run__timingCompleteness="complete"),                  # complete인데 ts 없음
+        ]
+        for rec in cases:
+            self.assertTrue(observatory.validate_observation(rec))
+        # receipt 경로 탈출
+        bad = _obs_v1()
+        bad["coordination"]["receipt"]["file"] = "../escape.md"
+        self.assertTrue(observatory.validate_observation(bad))
+
+    def test_stats_by_backend(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            observatory.ingest_report(sd, _obs_v1())
+            rec2 = _obs_v1(run__id="ocobs-" + "c" * 64, backend__id="claude-code")
+            observatory.ingest_report(sd, rec2)
+            s = observatory.stats(observatory.load_reported(sd), by="backend")
+            self.assertEqual(set(s["by"]), {"grok-build", "claude-code"})
+
+
+def _mp_ingest(sd, rec_json, barrier, q):
+    """2-process race 헬퍼 (spawn-picklable 모듈 레벨) — critic A3 회귀."""
+    from pathlib import Path as _P
+
+    from organum import observatory as _obs
+    rec = json.loads(rec_json)
+    barrier.wait(timeout=10)
+    try:
+        q.put(_obs.ingest_report(_P(sd), rec))
+    except _obs.IngestConflict:
+        q.put("conflict")
+    except ValueError:
+        q.put("invalid")
+
+
+class TestIngestCriticA1A3(unittest.TestCase):
+    """공동 schema critic 1차 blocker 회귀 — A1 timestamp→path · A2 strict 문법 · A3 동시성."""
+
+    # ── A1: raw timestamp가 shard 경로에 못 들어감 ──
+
+    def test_path_escape_timestamp_rejected_no_write(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            rec = _obs_v1(run__recordedAt="/../../")
+            with self.assertRaises(ValueError):
+                observatory.ingest_report(sd, rec)
+            self.assertEqual(list((sd / "observatory").glob("*")) if (sd / "observatory").exists() else [], [])
+            self.assertEqual(list(Path(td).glob("*.jsonl")), [])   # 경계 이탈 파일 없음
+
+    def test_type_confusion_timestamp_rejected_not_typeerror(self):
+        rec = _obs_v1(run__recordedAt=1)
+        errs = observatory.validate_observation(rec)   # TypeError가 아니라 controlled reject
+        self.assertTrue(errs)
+
+    def test_offset_timestamp_rejected(self):
+        rec = _obs_v1(run__recordedAt="2026-07-25T00:47:23+09:00")
+        self.assertTrue(observatory.validate_observation(rec))
+
+    def test_ordering_violation_rejected(self):
+        rec = _obs_v1(run__startedAt="2026-07-24T16:00:00Z",
+                      run__finishedAt="2026-07-24T15:00:00Z",
+                      run__recordedAt="2026-07-24T17:00:00Z")
+        errs = observatory.validate_observation(rec)
+        self.assertTrue(any("ordering" in e for e in errs))
+
+    def test_shard_name_from_parsed_datetime(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            observatory.ingest_report(sd, _obs_v1())
+            self.assertTrue((sd / "observatory" / "reported-2026-07.jsonl").is_file())
+
+    # ── A2: portable schema와 동일 언어 (strict) ──
+
+    def test_backend_grammar_exact_producer_regex(self):
+        for bad in ("under_score", "dot.ted", "trailing-", "a" * 65, "UPPER"):
+            self.assertTrue(observatory.validate_observation(_obs_v1(backend__id=bad)),
+                            f"producer-invalid인데 통과: {bad!r}")
+        for ok in ("grok-build", "claude-code", "deepcode", "opencode", "future-tui-2027", "a" * 64):
+            rec = _obs_v1(backend__id=ok)
+            self.assertFalse(observatory.validate_observation(rec), f"producer-valid인데 거부: {ok!r}")
+
+    def test_strict_shape_counterexamples(self):
+        base = _obs_v1()
+        extra_root = dict(base); extra_root["surprise"] = 1
+        extra_nested = _obs_v1(); extra_nested["usage"]["surprise"] = 1
+        missing_brain = _obs_v1(); del missing_brain["brain"]
+        cases = {
+            "extra root key": extra_root,
+            "extra nested key": extra_nested,
+            "missing brain": missing_brain,
+            "negative token": _obs_v1(usage__inputTokens=-1, usage__totalTokens=2031),
+            "fractional count": _obs_v1(usage__responses=14.5),
+            "bool as count": _obs_v1(usage__responses=True),
+            "enum drift": _obs_v1(run__status="ok"),
+        }
+        for name, rec in cases.items():
+            self.assertTrue(observatory.validate_observation(rec), f"통과되면 안 됨: {name}")
+
+    def test_receipt_dot_dotdot_rejected(self):
+        for bad in (".", "..", "a/b.md", "a\\b.md"):
+            rec = _obs_v1()
+            rec["coordination"]["receipt"]["file"] = bad
+            self.assertTrue(observatory.validate_observation(rec), f"통과되면 안 됨: {bad!r}")
+
+    def test_golden_and_failed_fixture_still_accepted(self):
+        self.assertFalse(observatory.validate_observation(_obs_v1()))
+        failed = _obs_v1(run__status="failed", identity__canonicalCell=None,
+                         identity__joinStatus="not-joined", identity__role=None)
+        failed["coordination"]["contributions"] = 0
+        failed["coordination"]["receipt"] = None       # contributions=0 → receipt null (A2.1)
+        failed["outcome"]["gate"] = "fail"
+        self.assertFalse(observatory.validate_observation(failed))
+
+    # ── A3: 동시성 conflict fail-closed ──
+
+    def test_two_process_same_payload_one_ingest(self):
+        import multiprocessing as mp
+        ctx = mp.get_context("spawn")
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            rec_json = json.dumps(_obs_v1())
+            barrier = ctx.Barrier(2); q = ctx.Queue()
+            ps = [ctx.Process(target=_mp_ingest, args=(str(sd), rec_json, barrier, q))
+                  for _ in range(2)]
+            for p in ps: p.start()
+            for p in ps: p.join(30)
+            results = sorted(q.get(timeout=5) for _ in range(2))
+            self.assertEqual(results, ["duplicate", "ingested"])
+            shard = sd / "observatory" / "reported-2026-07.jsonl"
+            self.assertEqual(len(shard.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_two_process_changed_payload_conflict(self):
+        import multiprocessing as mp
+        ctx = mp.get_context("spawn")
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            a = json.dumps(_obs_v1())
+            b = json.dumps(_obs_v1(usage__outputTokens=9999, usage__totalTokens=259215 + 9999))
+            barrier = ctx.Barrier(2); q = ctx.Queue()
+            ps = [ctx.Process(target=_mp_ingest, args=(str(sd), r, barrier, q)) for r in (a, b)]
+            for p in ps: p.start()
+            for p in ps: p.join(30)
+            results = sorted(q.get(timeout=5) for _ in range(2))
+            self.assertEqual(results, ["conflict", "ingested"])
+            shard = sd / "observatory" / "reported-2026-07.jsonl"
+            self.assertEqual(len(shard.read_text(encoding="utf-8").splitlines()), 1)
+
+    def test_loader_quarantines_conflicting_shard(self):
+        # pre-existing 샤드에 같은 run·다른 fp 두 줄 → LWW 금지, 격리 + 표면화
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            observatory.ingest_report(sd, _obs_v1())
+            shard = sd / "observatory" / "reported-2026-07.jsonl"
+            row = json.loads(shard.read_text(encoding="utf-8"))
+            evil = dict(row); evil["payload_fp"] = "f" * 64
+            evil["ingested_at"] = "2099-01-01T00:00:00Z"   # LWW였다면 이게 이겼을 것
+            with open(shard, "a", encoding="utf-8") as f:
+                f.write(json.dumps(evil, ensure_ascii=False) + "\n")
+            self.assertEqual(observatory.load_reported(sd), [])          # 격리 → 0행
+            self.assertEqual(observatory.reported_conflicts(sd), [row["run_id"]])
+
+
+class TestIngestCriticA21(unittest.TestCase):
+    """A2.1 잔여 — usage completeness superRefine 등가 + finite number (6 differential 회귀)."""
+
+    def test_unavailable_with_measured_counters_rejected(self):
+        rec = _obs_v1(usage__completeness="unavailable")   # counter들 measured 유지
+        self.assertTrue(observatory.validate_observation(rec))
+
+    def test_unavailable_all_null_accepted(self):
+        rec = _obs_v1(usage__completeness="unavailable", usage__source="unavailable",
+                      usage__requests=None, usage__responses=None, usage__inputTokens=None,
+                      usage__outputTokens=None, usage__cachedInputTokens=None,
+                      usage__totalTokens=None, usage__reasoningTokens=None, usage__costUsd=None)
+        self.assertFalse(observatory.validate_observation(rec))
+
+    def test_complete_requires_requests(self):
+        rec = _obs_v1(usage__completeness="complete")      # requests=null 유지
+        self.assertTrue(observatory.validate_observation(rec))
+        ok = _obs_v1(usage__completeness="complete", usage__requests=14)
+        self.assertFalse(observatory.validate_observation(ok))
+
+    def test_responses_le_requests(self):
+        rec = _obs_v1(usage__requests=1)                   # responses=14 > requests=1
+        self.assertTrue(observatory.validate_observation(rec))
+
+    def test_zero_contributions_requires_null_receipt(self):
+        rec = _obs_v1()
+        rec["coordination"]["contributions"] = 0           # receipt 유지 → 거부
+        self.assertTrue(observatory.validate_observation(rec))
+        rec["coordination"]["receipt"] = None
+        self.assertFalse(observatory.validate_observation(rec))
+
+    def test_nonfinite_costusd_rejected(self):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            rec = _obs_v1(usage__costUsd=bad)
+            self.assertTrue(observatory.validate_observation(rec), f"통과되면 안 됨: {bad!r}")
+
+    def test_cli_rejects_nonstandard_json_constants(self):
+        # CLI parse 단계에서 NaN/Infinity controlled reject + write 0
+        import io
+        from contextlib import redirect_stderr
+
+        from organum import cli as cli_mod
+        with tempfile.TemporaryDirectory() as td:
+            proj = Path(td)
+            bad = proj / "bad.json"
+            bad.write_text('{"schema": "organum-code/observation/v1", "usage": {"costUsd": NaN}}',
+                           encoding="utf-8")
+            import os
+            from contextlib import redirect_stdout
+            cwd = os.getcwd()
+            os.chdir(proj)
+            try:
+                with redirect_stdout(io.StringIO()):
+                    cli_mod.main(["init"])                  # 실제 init으로 유효 state 생성
+                err = io.StringIO()
+                with redirect_stderr(err):
+                    rc = cli_mod.main(["observatory", "ingest", str(bad)])
+            finally:
+                os.chdir(cwd)
+            self.assertNotEqual(rc, 0)                      # controlled nonzero
+            self.assertIn("nonstandard", err.getvalue())
+            self.assertEqual(list((proj / ".organum" / "observatory").glob("reported-*")), [])
+
+
+class TestCorrelation(unittest.TestCase):
+    """H1 correlation 링크 — exact (backend, nativeSessionId) pair만, 읽기 시점·무기록·무병합."""
+
+    NSID = "6a670000-1111-2222-3333-444455556666"
+
+    def _reported(self, sd, backend="claude-code", nsid=NSID, rid_suffix="a"):
+        rec = _obs_v1(backend__id=backend, backend__nativeSessionId=nsid,
+                      run__id="ocobs-" + rid_suffix * 64)
+        self.assertEqual(observatory.ingest_report(sd, rec), "ingested")
+
+    def test_linked_exact_pair(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            observatory.record(sd, [_c(sid=self.NSID, out_tok=2100, model="solar-open2")],
+                               reason="test")
+            self._reported(sd)
+            links = observatory.correlate(sd)
+            self.assertEqual(len(links), 1)
+            l = links[0]
+            self.assertEqual(l["link_status"], "linked")
+            self.assertEqual(l["passive"]["out_tok"], 2100)     # 양 소스 나란히
+            self.assertEqual(l["reported"]["out_tok"], 2032)    # 병합 없음 — 각자 값 유지
+            self.assertEqual(l["reported"]["usage_completeness"], "lower-bound")
+
+    def test_no_passive_when_absent(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            self._reported(sd)
+            self.assertEqual(observatory.correlate(sd)[0]["link_status"], "no-passive")
+
+    def test_no_native_id(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            self._reported(sd, nsid=None)
+            l = observatory.correlate(sd)[0]
+            self.assertEqual(l["link_status"], "no-native-id")
+            self.assertIsNone(l["passive"])
+
+    def test_unknown_backend_no_mapping(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            self._reported(sd, backend="future-tui-2027")
+            # 미지 백엔드도 ingest는 유효(계약 1) — correlation만 no-mapping
+            self.assertEqual(observatory.correlate(sd)[0]["link_status"], "no-mapping")
+
+    def test_cross_vendor_same_sid_not_linked(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            # 같은 session id가 다른 vendor 네임스페이스(grok)에 존재 — claude-code는 못 잇는다
+            observatory.record(sd, [adapters._cell("grok", self.NSID,
+                                                   last_ts="2026-07-15T10:00:00Z")],
+                               reason="test")
+            self._reported(sd, backend="claude-code")
+            self.assertEqual(observatory.correlate(sd)[0]["link_status"], "no-passive")
+
+    def test_prefix_id_not_linked(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            observatory.record(sd, [_c(sid=self.NSID[:-1])], reason="test")  # 근접 id
+            self._reported(sd)
+            self.assertEqual(observatory.correlate(sd)[0]["link_status"], "no-passive")
+
+    def test_correlate_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            observatory.record(sd, [_c(sid=self.NSID)], reason="test")
+            self._reported(sd)
+            before = sorted((p.name, p.stat().st_size)
+                            for p in (sd / "observatory").iterdir())
+            observatory.correlate(sd)
+            after = sorted((p.name, p.stat().st_size)
+                           for p in (sd / "observatory").iterdir())
+            self.assertEqual(before, after)                 # 읽기 시점 계산 — 무기록
+
+    def test_days_filters_reported_only_passive_window_free(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            # passive는 오래전 settle — reported 창(since_days) 밖이어도 링크되어야
+            observatory.record(sd, [_c(sid=self.NSID, last_ts="2026-01-01T00:00:00Z")],
+                               reason="test")
+            self._reported(sd)   # anchor=recordedAt 2026-07-24
+            links = observatory.correlate(sd, since_days=36500)
+            self.assertEqual(links[0]["link_status"], "linked")
+
+    def test_render_smoke(self):
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            observatory.record(sd, [_c(sid=self.NSID)], reason="test")
+            self._reported(sd)
+            out = observatory.render_correlation(observatory.correlate(sd), 30)
+            self.assertIn("linked 1", out)
+            self.assertIn("reported:", out)
+            self.assertIn("passive :", out)
+            self.assertIn("병합·판결 없음", out)
