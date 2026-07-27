@@ -32,6 +32,44 @@ PRICES: dict[str, dict[str, float]] = {
 }
 
 
+def user_prices(path_override: str | None = None) -> dict:
+    """사용자 단가표(BYO prices) — organum은 단가를 배포하지 않는다(stale 단가 함정,
+    measured≠asserted). 우선순위: 인자 path > env ORGANUM_PRICES > ~/.organum/prices.json.
+    형식: {"<model>": {"in": $/Mtok, "out": $/Mtok, "cache_read": $/Mtok[, "cache_write": …]}}.
+    필수 3키(in/out/cache_read) 없는 엔트리는 건너뜀·파일/파싱 오류는 빈 표 —
+    fail-closed(잘못된 단가로 비용을 지어내지 않는다)."""
+    import math as _math
+    if path_override:
+        p = Path(path_override).expanduser()
+    elif os.environ.get("ORGANUM_PRICES"):
+        p = Path(os.environ["ORGANUM_PRICES"]).expanduser()
+    else:
+        p = Path.home() / ".organum" / "prices.json"
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    out: dict = {}
+    for m, pr in d.items():
+        if not (isinstance(m, str) and isinstance(pr, dict)):
+            continue
+        try:
+            vals = {k: float(pr[k]) for k in ("in", "out", "cache_read")}
+            vals["cache_write"] = float(pr.get("cache_write", 0.0))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if all(_math.isfinite(v) and v >= 0 for v in vals.values()):
+            out[m] = vals
+    return out
+
+
+def effective_prices(path_override: str | None = None) -> dict:
+    """내장 PRICES(현재 빈 표) 위에 사용자 단가표를 겹친 유효 단가."""
+    return {**PRICES, **user_prices(path_override)}
+
+
 def _mangle(cwd: Path) -> str:
     return str(cwd.resolve()).replace("/", "-")
 

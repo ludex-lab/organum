@@ -53,6 +53,34 @@ def normalize_loadout(val) -> list[str]:
     return out
 
 
+# problem-type taxonomy (organ-effect-matrix v0.1.1 §5) — 닫힌 집합. 자유 문자열 확장 금지
+# (measured≠asserted: 새 유형은 스키마 개정으로만 — 매트릭스 축이 조용히 발산하는 것 차단).
+PROBLEM_TYPES = frozenset({
+    "discovery/navigation",
+    "sequential-dependency/commit",
+    "sequential-dependency/execution-order",
+    "seam/integration",
+    "spec-conformance",
+    "greenfield-generation",
+    "refactor/migration",
+    "action-selection",
+})
+
+
+def validate_problem_type(val):
+    """problem_type 검증 — None(미선언) 또는 §5 taxonomy 슬러그만. 위반은 SessionError."""
+    if val is None:
+        return None
+    v = str(val).strip()
+    if not v:
+        return None
+    if v not in PROBLEM_TYPES:
+        raise SessionError(
+            f"problem_type {v!r}는 taxonomy 밖 — 유효: {', '.join(sorted(PROBLEM_TYPES))}. "
+            "(새 유형은 organ-effect-matrix 스키마 개정으로만.)")
+    return v
+
+
 # 기본 역할 헌장 — dry·짧게. commons(state_dir/roles/<slug>.md)로 현장별 override 가능.
 ROLE_CHARTERS: dict[str, str] = {
     "engine": (
@@ -173,13 +201,15 @@ def resolve_charter(state_dir: Path, role: str) -> str:
 
 
 def start(soma: Path, cell: str, role: str, intent: str, charter: str,
-          loadout=None) -> dict:
+          loadout=None, problem_type=None) -> dict:
     """세션 선언. 이미 열린 세션이 있으면 거부 (한 세포 = 한 열린 세션 = 규율).
-    loadout = 이 세션에 붙은 organ 집합(기본 전-preset `["*"]`, v0.1.1 §1) — observation row로 흐른다."""
+    loadout = 이 세션에 붙은 organ 집합(기본 전-preset `["*"]`, v0.1.1 §1) — observation row로 흐른다.
+    problem_type = §5 taxonomy 슬러그(선택) — 매트릭스의 문제 축, 역시 row로 흐른다."""
     if not st.valid_cell_id(cell):  # canonical id 계약 — ledger 쓰기 ingress (critic)
         raise SessionError(
             f"cell id {cell!r}가 계약 위반 — ASCII [A-Za-z0-9._-] 1~40자, 선/후행 점 금지.")
     loadout = normalize_loadout(loadout)
+    problem_type = validate_problem_type(problem_type)
     _, r_open = _open(soma)
     if r_open is not None:
         raise SessionError(
@@ -195,6 +225,7 @@ def start(soma: Path, cell: str, role: str, intent: str, charter: str,
         "role": role,
         "intent": intent.strip(),
         "loadout": loadout,
+        "problem_type": problem_type,
         "charter": charter,
         "started_at": st.utc_now_iso(),
         "ended_at": None,
@@ -296,6 +327,7 @@ def sessions_for_join(state_dir: Path) -> list[dict]:
                 "ended_at": rec.get("ended_at"),
                 # 레거시(loadout 키 이전) 세션은 전-preset(unvaried) — 과거 dogfood는 전부 전-organ.
                 "loadout": rec.get("loadout", list(LOADOUT_FULL)),
+                "problem_type": rec.get("problem_type"),  # 레거시=None(미선언 — 정직)
             })
     return out
 

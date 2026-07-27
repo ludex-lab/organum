@@ -1048,6 +1048,13 @@ def cmd_alarm(args: argparse.Namespace) -> int:
 def cmd_bench(args: argparse.Namespace) -> int:
     from organum import bench as _bench
     state_dir = _require_state()
+    if args.bench_cmd == "cells":  # claim cell 집계 (effect_vector 집계기 v0 — read-only)
+        rep = _bench.cells(state_dir, since_days=args.days)
+        if args.json:
+            print(json.dumps(rep, ensure_ascii=False))
+            return 0
+        print(_bench.render_cells(rep))
+        return 0
     rep = _bench.report(state_dir, since_days=args.days)
     if args.json:
         print(json.dumps(rep, ensure_ascii=False))
@@ -1073,10 +1080,11 @@ def cmd_session(args: argparse.Namespace) -> int:
             return 0
         try:
             rec = session_mod.start(soma, cell, args.role, args.intent, charter,
-                                    loadout=args.loadout)
+                                    loadout=args.loadout, problem_type=args.problem_type)
         except session_mod.SessionError as e:
             raise SystemExit(f"organum session: {e}")
-        print(f"session start · {rec['sid']} · [{rec['role']}] {rec['intent']} · loadout {rec['loadout']}")
+        pt = f" · problem {rec['problem_type']}" if rec.get("problem_type") else ""
+        print(f"session start · {rec['sid']} · [{rec['role']}] {rec['intent']} · loadout {rec['loadout']}{pt}")
         if not args.quiet_charter:
             print("\n" + charter.rstrip())
         return 0
@@ -1153,8 +1161,9 @@ def cmd_join(args: argparse.Namespace) -> int:
     _writable_meta(state_dir)
     cwd = state_dir.parent  # relay/agora field 루트
     cid = _forid(args) or uuid.uuid4().hex[:8]
-    try:  # loadout 형식 위반은 하드 에러
+    try:  # loadout/problem_type 형식 위반은 하드 에러
         loadout = session_mod.normalize_loadout(args.loadout)
+        problem_type = session_mod.validate_problem_type(args.problem_type)
     except session_mod.SessionError as e:
         raise SystemExit(f"organum join: {e}")
 
@@ -1168,7 +1177,7 @@ def cmd_join(args: argparse.Namespace) -> int:
     else:
         try:
             session_mod.start(soma, cid, args.role, args.intent or f"{args.role} 세션", charter,
-                              loadout=loadout)
+                              loadout=loadout, problem_type=problem_type)
             started = True
         except session_mod.SessionError as e:
             raise SystemExit(f"organum join: {e}")  # 빈 intent 등 — non-zero(무음 삼킴 금지)
@@ -1376,6 +1385,10 @@ def build_parser() -> argparse.ArgumentParser:
     pb_peers.add_argument("--peer", default=None, help="한 피어 상세 (verbatim strengths/frictions/role_fit + provenance)")
     pb_peers.add_argument("--days", type=float, default=None, help="ended_at 창(일, 기본 전체)")
     pb_peers.add_argument("--json", action="store_true", help="기계용 JSON {entries_n,peers,wpa,wpa_saturated}")
+    pb_cells = bench_sub.add_parser("cells", help="claim cell 집계 — observation row를 brain×role×problem_type×loadout로 "
+                                    "(§6 joint_observed·contrast 정직성, read-only)")
+    pb_cells.add_argument("--days", type=float, default=None, help="row 창(일, 기본 전체)")
+    pb_cells.add_argument("--json", action="store_true", help="기계용 JSON {cells,rows_n}")
     p_bench.set_defaults(func=cmd_bench)
 
     p_obs = sub.add_parser("observatory", help="관측 영속화 — 세션 소비 스냅샷 축적(월 샤드)·통계 (transcript ~30일 시한부 대비)")
@@ -1572,6 +1585,8 @@ def build_parser() -> argparse.ArgumentParser:
     pss.add_argument("--for", dest="for_id", default=None, help="이 세포 id — 게스트면 자기 soma (생략=owner)")
     pss.add_argument("--loadout", default=None,
                      help="이 세션에 붙은 organ 집합 (쉼표/공백 구분; 기본=전-preset '*', 'bare'=organ 없음) — observation row로 흐른다")
+    pss.add_argument("--problem-type", dest="problem_type", default=None,
+                     help="이 세션의 문제 유형 — organ-effect-matrix §5 taxonomy 슬러그 (선택, row로 흐른다)")
     pss.add_argument("--quiet-charter", dest="quiet_charter", action="store_true", help="시작 시 역할 헌장 출력 생략")
     psn = ses_sub.add_parser("note", help="진행 비트 기록 (자기 규율 체크포인트)")
     psn.add_argument("text", help="비트 내용")
@@ -1595,6 +1610,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_join.add_argument("--intent", default=None, help="세션 의도 (생략 시 '<역할> 세션')")
     p_join.add_argument("--loadout", default=None,
                         help="이 세포에 붙은 organ 집합 (쉼표/공백; 기본=전-preset '*', 'bare'=없음)")
+    p_join.add_argument("--problem-type", dest="problem_type", default=None,
+                        help="이 세션의 문제 유형 — organ-effect-matrix §5 taxonomy 슬러그 (선택)")
     p_join.add_argument("--for", dest="for_id", default=None, help="세포 id 고정 (생략 시 ORGANUM_CELL 또는 자동생성)")
     p_join.add_argument("--persona", default=None,
                         help="워크스페이스 넘는 안정 전문성 정체성 — 주면 크로스-워크스페이스 허브에 등록(opt-in)")

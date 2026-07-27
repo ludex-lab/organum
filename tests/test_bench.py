@@ -153,3 +153,78 @@ class TestBench(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCells(unittest.TestCase):
+    """claim cell 집계 — §1 키·§6 joint_observed·contrast 정직성·C2."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.state_dir, _ = st.init_state_dir(Path(self._tmp.name), "owner")
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def _row(self, sid, model="solar-open2", role="critic", ptype="seam/integration",
+             loadout=("*",), in_tok=100, joint=True, declared="lens"):
+        obs = self.state_dir / "observatory"
+        obs.mkdir(parents=True, exist_ok=True)
+        row = {"v": 1, "vendor": "grok", "session_id": sid, "last_ts": "2026-07-25T09:00:00Z",
+               "model": model, "role": role, "problem_type": ptype,
+               "loadout": list(loadout) if loadout is not None else None,
+               "joint_observed": joint, "declared": declared, "id": sid[:8],
+               "in_tok": in_tok, "out_tok": None, "cache": 50,
+               "tools": {"read": 2}, "files_touched": 1, "origin": "terminal"}
+        with open(obs / "2026-07.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+
+    def test_grouping_and_c2(self):
+        self._row("s1", in_tok=100)
+        self._row("s2", in_tok=200)
+        self._row("s3", role="engine", ptype=None, declared=None)   # 다른 셀
+        rep = bench.cells(self.state_dir)
+        self.assertEqual(rep["rows_n"], 3)
+        self.assertEqual(len(rep["cells"]), 2)
+        c = rep["cells"][0]                                # n 내림차순 — critic 셀
+        self.assertEqual((c["brain"], c["role"], c["problem_type"]),
+                         ("solar-open2", "critic", "seam/integration"))
+        self.assertEqual(c["n"], 2)
+        self.assertEqual(c["cost"]["in_tok"], 300)         # 측정분 합
+        self.assertIsNone(c["cost"]["out_tok"])            # C2: 전부 미측정=None(0 아님)
+        self.assertEqual(c["cost"]["out_tok_unmeasured"], 2)
+        self.assertTrue(c["joint_observed"])               # §6 필드 강제
+        self.assertEqual(c["declared_cells"], ["lens"])
+        self.assertEqual(c["evidence_grade"], "rwe-observational")
+
+    def test_contrast_status_honesty(self):
+        # loadout 상수 → no-loadout-variation · 변주 존재 → varied-no-score (delta 주장 없음)
+        self._row("s1", loadout=("*",))
+        rep = bench.cells(self.state_dir)
+        self.assertEqual(rep["cells"][0]["contrast_status"], "no-loadout-variation")
+        self.assertIsNone(rep["cells"][0]["contrast"])
+        self._row("s2", loadout=())                        # 같은 brp에 bare 변주
+        rep2 = bench.cells(self.state_dir)
+        self.assertEqual(len(rep2["cells"]), 2)
+        for c in rep2["cells"]:
+            self.assertEqual(c["contrast_status"], "varied-no-score")
+            self.assertIsNone(c["contrast"])               # score 원천 없음 — delta 주장 안 함
+
+    def test_legacy_row_joint_derived_from_role(self):
+        # joint_observed 키 이전 레거시 row — role 있으면 worker 세팅 상수로 joint 처리
+        obs = self.state_dir / "observatory"
+        obs.mkdir(parents=True, exist_ok=True)
+        row = {"v": 1, "vendor": "grok", "session_id": "sL", "last_ts": "2026-07-25T09:00:00Z",
+               "model": "m", "role": "engine", "loadout": ["*"], "in_tok": 1,
+               "tools": {}, "origin": "terminal"}
+        with open(obs / "2026-07.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+        rep = bench.cells(self.state_dir)
+        self.assertTrue(rep["cells"][0]["joint_observed"])
+
+    def test_render_cells_smoke(self):
+        self._row("s1")
+        out = bench.render_cells(bench.cells(self.state_dir))
+        self.assertIn("bench cells", out)
+        self.assertIn("solar-open2 × critic × seam/integration", out)
+        self.assertIn("no-loadout-variation", out)
+        self.assertIn("분리 효과 주장 불가", out)          # §6 정직 경계 명시

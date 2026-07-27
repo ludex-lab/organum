@@ -301,6 +301,24 @@ class TestBrainRoleJoin(unittest.TestCase):
             self.assertEqual(r["join_status"], "joined")
             self.assertEqual(r["loadout"], ["relay", "guard"])
 
+    def test_problem_type_and_joint_observed_flow(self):
+        # §5 problem_type이 조인된 row로 흐르고 §6 joint_observed가 필드로 강제된다
+        from organum import session, web
+        with tempfile.TemporaryDirectory() as td:
+            sd, _ = st.init_state_dir(Path(td), "owner")
+            soma = st.ensure_soma(sd, "beta")
+            session.start(soma, "beta", "critic", "v1", "# c\n",
+                          problem_type="seam/integration")
+            session.end(soma)
+            tp = Path(td) / "t2.jsonl"
+            tp.write_text("ORGANUM_CELL=beta\n", encoding="utf-8")
+            web._declared_cache.clear()
+            observatory.record(sd, [adapters._cell("codex", "cP", last_ts="2026-07-15T10:00:00Z",
+                                                   path=str(tp))], "sync")
+            r = observatory.load(sd)[0]
+            self.assertEqual(r["problem_type"], "seam/integration")
+            self.assertTrue(r["joint_observed"])           # worker row = 교란 필드 명시
+
     def test_loadout_none_when_unjoined(self):
         # 미조인 셀(브리지 없음)은 loadout None — role None과 같은 정직성(오귀속 금지)
         with tempfile.TemporaryDirectory() as td:
@@ -309,6 +327,8 @@ class TestBrainRoleJoin(unittest.TestCase):
             r = observatory.load(sd)[0]
             self.assertIsNone(r["role"])
             self.assertIsNone(r["loadout"])
+            self.assertIsNone(r["problem_type"])
+            self.assertIsNone(r["joint_observed"])   # 미조인 = 주장 자체 불가(None, false 아님)
 
     def test_marker_left_boundary_record_level(self):
         # NOT_ 접두 identifier만 있는 transcript → record() 최신 row까지 role None (critic 재감사-6)

@@ -78,23 +78,55 @@ def _chips(pairs: list) -> str:
         f"<span class='chip'>{_e(k)} {_e(v)}</span>" for k, v in pairs) + "</div>"
 
 
+def _fmt_pct(v) -> str:
+    return "—" if v is None else f"{v:.0f}%"
+
+
 def _session_table(cells: list) -> str:
+    any_role = any(c.get("role") for c in cells)
     rows = []
     for c in cells:
         start = (c.get("first_ts") or "")[5:16].replace("T", " ") or "—"
+        role_td = f"<td class='dim'>{_e(c.get('role') or '—')}</td>" if any_role else ""
         rows.append(
             f"<tr><td style='color:{_hue(c['vendor'])}'>{_e(c['vendor'])}</td>"
-            f"<td>{_e(c.get('model'))}</td><td class='dim'>{_e(c.get('origin'))}</td>"
+            f"<td>{_e(c.get('model'))}</td>{role_td}<td class='dim'>{_e(c.get('origin'))}</td>"
             f"<td>{_e(start)}</td><td class='n'>{_e(_fmt_dur(c.get('duration_s')))}</td>"
             f"<td class='n'>{_e(_fmt_tok(c.get('in_tok')))}</td>"
             f"<td class='n'>{_e(_fmt_tok(c.get('out_tok')))}</td>"
             f"<td class='n'>{_e(_fmt_tok(c.get('cache')))}</td>"
+            f"<td class='n'>{_e(_fmt_pct(c.get('cache_pct')))}</td>"
             f"<td class='n'>{_e(c.get('tool_calls', sum((c.get('tools') or {}).values())))}</td>"
             f"<td class='n'>{_e(len(c.get('files') or []))}</td></tr>")
-    return ("<div class='overflow'><table><tr><th>vendor</th><th>model</th><th>origin</th>"
+    role_th = "<th>role</th>" if any_role else ""
+    return ("<div class='overflow'><table><tr><th>vendor</th><th>model</th>" + role_th +
+            "<th>origin</th>"
             "<th>start</th><th class='n'>duration</th><th class='n'>in</th>"
-            "<th class='n'>out</th><th class='n'>cache</th><th class='n'>tools</th>"
+            "<th class='n'>out</th><th class='n'>cache</th><th class='n'>c%</th>"
+            "<th class='n'>tools</th>"
             "<th class='n'>files</th></tr>" + "".join(rows) + "</table></div>")
+
+
+def _reported_table(reported: list) -> str:
+    """supervisor 하네스 보고 관측 — 별도 증거 밴드(합산 안 함). reported c% = cached/input."""
+    if not reported:
+        return ""
+    rows = []
+    for r in reported:
+        rin, rc = r.get("in_tok"), r.get("cache")
+        pct = (rc / rin * 100.0) if (rin and rc is not None and rin > 0) else None
+        rows.append(
+            f"<tr><td>{_e(r.get('backend') or '—')}</td><td>{_e(r.get('model') or '—')}</td>"
+            f"<td class='dim'>{_e(r.get('run_status') or '—')}</td>"
+            f"<td class='n'>{_e(_fmt_tok(rin))}</td>"
+            f"<td class='n'>{_e(_fmt_tok(r.get('out_tok')))}</td>"
+            f"<td class='n'>{_e(_fmt_tok(rc))}</td>"
+            f"<td class='n'>{_e(_fmt_pct(pct))}</td>"
+            f"<td class='dim'>{_e(r.get('gate') or '—')}</td></tr>")
+    return ("<h2>Reported — supervisor harness (separate evidence, never merged)</h2>"
+            "<div class='overflow'><table><tr><th>backend</th><th>model</th><th>status</th>"
+            "<th class='n'>in</th><th class='n'>out</th><th class='n'>cache</th>"
+            "<th class='n'>c%</th><th>gate</th></tr>" + "".join(rows) + "</table></div>")
 
 
 def _timeline(cells: list) -> str:
@@ -141,7 +173,7 @@ def _vendor_rollup(cells: list) -> str:
 
 
 def inspector_page(cells: list, project: str, window_days: float,
-                   generated_at: str | None = None) -> str:
+                   generated_at: str | None = None, reported: list | None = None) -> str:
     gen = generated_at or time.strftime("%Y-%m-%d %H:%M %Z")
     measured_in = [c["in_tok"] for c in cells if c.get("in_tok") is not None]
     durs = [c["duration_s"] for c in cells if c.get("duration_s") is not None]
@@ -152,6 +184,7 @@ def inspector_page(cells: list, project: str, window_days: float,
     body += _timeline(cells)
     body += "<h2>Sessions</h2>" + _session_table(cells)
     body += _vendor_rollup(cells)
+    body += _reported_table(reported or [])
     return _page(f"organum inspector · {project}",
                  f"post-hoc metering · generated {gen}", body)
 

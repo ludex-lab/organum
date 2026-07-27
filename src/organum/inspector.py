@@ -36,7 +36,19 @@ MSG = {
         "col.start": "start", "col.dur": "duration",
         "sum": "  Σ {vendor} {n} sessions · duration {dur} · in {in_} · tools {tools} · files {files}",
         "legend": "\n  '—' = unmeasured (the vendor doesn't record it on disk) — never a silent zero."
-                  " Token semantics differ per vendor; duration, tools and files are the safe axes.",
+                  " Token semantics differ per vendor; duration, tools and files are the safe axes."
+                  " c% = cache/(in+cache), a cost lever — measured inputs only.",
+        "legend.blind": "  Supervised (ACP) harness runs are outside passive metering — records"
+                        " accepted via 'organum observatory ingest' appear in the reported band.",
+        "cost.legend": "  cost ≈ user-supplied prices (--prices · ORGANUM_PRICES · ~/.organum/prices.json),"
+                       " cache-write excluded.",
+        "help.prices": "user price table JSON path (default: ORGANUM_PRICES env, then ~/.organum/prices.json)",
+        "col.role": "role",
+        "rep.hdr": "\n  ─ reported — supervisor-harness runs (separate evidence, never merged) ─",
+        "rep.legend": "  reported c% = cached/input (broker-metered). These runs are invisible to"
+                      " passive metering above — two evidence kinds, side by side.",
+        "health.line": "  ⚠ substrate-health: {n} finding(s) on this machine's agent stores —"
+                       " see 'organum observatory health'",
         "integ.hdr": "\n  ─ core-integrity audit (bless = git commit · reconstructive) ─",
         "integ.incomplete": "  ⚠ scan incomplete — core-manifest is corrupt; declared core dropped. "
                             "Partial result; not 'all blessed'.",
@@ -57,7 +69,19 @@ MSG = {
         "col.start": "시작", "col.dur": "소요",
         "sum": "  Σ {vendor} {n}세션 · 소요 {dur} · in {in_} · tools {tools} · files {files}",
         "legend": "\n  '—' = 미측정(그 벤더가 디스크에 안 남김) — 0이 아닙니다."
-                  " 토큰 계수 의미는 벤더별로 다릅니다(교차 비교는 시간·툴·파일이 안전).",
+                  " 토큰 계수 의미는 벤더별로 다릅니다(교차 비교는 시간·툴·파일이 안전)."
+                  " c% = cache/(in+cache), 비용 레버 — 측정분만.",
+        "legend.blind": "  supervised(ACP) 하네스 run은 passive 계측 밖입니다 — 'organum observatory"
+                        " ingest'로 수용된 기록이 reported 밴드로 나타납니다.",
+        "cost.legend": "  비용 ≈ 사용자 단가표(--prices · ORGANUM_PRICES · ~/.organum/prices.json),"
+                       " 캐시 쓰기 제외.",
+        "help.prices": "사용자 단가표 JSON 경로 (기본: ORGANUM_PRICES env → ~/.organum/prices.json)",
+        "col.role": "역할",
+        "rep.hdr": "\n  ─ reported — supervisor 하네스 run (별도 증거, 합산 안 함) ─",
+        "rep.legend": "  reported c% = cached/input (broker 계측). 이 run들은 위 passive 계측에"
+                      " 보이지 않습니다 — 두 증거를 나란히 둘 뿐 섞지 않습니다.",
+        "health.line": "  ⚠ substrate-health: 이 머신의 에이전트 store에서 {n}건 발견 —"
+                       " 'organum observatory health'로 확인",
         "integ.hdr": "\n  ─ core-integrity 감사 (bless = git commit · 재구성) ─",
         "integ.incomplete": "  ⚠ scan 불완전 — core-manifest 손상으로 선언 core 탈락. "
                             "부분 결과이며 'all blessed' 아님.",
@@ -108,14 +132,55 @@ def _fmt_tok(v) -> str:
     return str(v)
 
 
+def _cache_pct(in_tok, cache) -> float | None:
+    """cache/(in+cache) — 캐시 회수 비율(비용 레버). 어느 쪽이든 미측정이면 None(C2)."""
+    if in_tok is None or cache is None or (in_tok + cache) <= 0:
+        return None
+    return cache / (in_tok + cache) * 100.0
+
+
+def _fmt_pct(v) -> str:
+    return "—" if v is None else f"{v:.0f}%"
+
+
 def collect(path: Path, window_days: float) -> list:
-    """cwd=path의 전 벤더 세션을 deep 파싱으로 수집, duration_s 부착. read-only."""
+    """cwd=path의 전 벤더 세션을 deep 파싱으로 수집, duration_s·cache_pct 부착. read-only."""
     from organum import adapters
     cells = adapters.snapshot(str(path), window_min=window_days * 24 * 60, deep=True)
     for c in cells:
         c["duration_s"] = _dur_s(c.get("first_ts"), c.get("last_ts"))
         c["tool_calls"] = sum((c.get("tools") or {}).values())
+        c["cache_pct"] = _cache_pct(c.get("in_tok"), c.get("cache"))
     return sorted(cells, key=lambda c: c.get("first_ts") or c.get("last_ts") or "")
+
+
+def attribute(path: Path, cells: list) -> None:
+    """선언 귀속(additive) — 대상 프로젝트에 .organum이 있으면 declared cell·role·loadout을
+    세션에 주석. 없으면 no-op(no-setup 명제 불변). 실패는 조용히 미귀속(관측 정직성)."""
+    sd = path / ".organum"
+    if not sd.is_dir():
+        return
+    try:
+        from organum.observatory import _declared_join
+        joins = _declared_join(sd, cells)
+    except Exception:
+        return
+    for c in cells:
+        j = joins.get(c["id"]) or {}
+        c["declared"], c["role"], c["loadout"] = j.get("declared"), j.get("role"), j.get("loadout")
+
+
+def reported_runs(path: Path) -> list:
+    """reported 밴드(별도 증거) — 프로젝트가 supervisor 하네스 관측을 ingest했으면 낸다.
+    passive와 절대 합산하지 않는다(이중계산 방지 — observatory --source 분리와 동일 규율)."""
+    sd = path / ".organum"
+    if not (sd / "observatory").is_dir():
+        return []
+    try:
+        from organum.observatory import load_reported
+        return load_reported(sd)
+    except Exception:
+        return []
 
 
 def _sessions_at(cells: list, iso: str | None) -> list:
@@ -155,21 +220,35 @@ def core_integrity(path: Path, cells: list) -> list:
 
 
 def render(cells: list, path: Path, window_days: float, integ: list | None = None,
-           integ_incomplete: bool = False) -> str:
+           integ_incomplete: bool = False, reported: list | None = None,
+           prices: dict | None = None) -> str:
+    prices = prices or {}
+
+    def _sess_cost(c) -> float | None:
+        pr = prices.get(c.get("model") or "")
+        if not pr:
+            return None
+        return ((c.get("in_tok") or 0) * pr["in"] + (c.get("out_tok") or 0) * pr["out"]
+                + (c.get("cache") or 0) * pr["cache_read"]) / 1_000_000
+
     lines = [_t("hdr", name=path.name, days=window_days, n=len(cells))]
+    any_role = any(c.get("role") for c in cells)
+    any_cost = any(_sess_cost(c) is not None for c in cells)
     if not cells:
         lines.append(_t("empty"))
     else:
-        hdr = (f"  {'vendor':<9} {'model':<24} {_t('col.start'):<12} {_t('col.dur'):>7}"
-               f" {'in':>8} {'out':>7} {'cache':>7} {'tools':>5} {'files':>5}")
+        role_h = f" {_t('col.role'):<8}" if any_role else ""
+        hdr = (f"  {'vendor':<9} {'model':<24}{role_h} {_t('col.start'):<12} {_t('col.dur'):>7}"
+               f" {'in':>8} {'out':>7} {'cache':>7} {'c%':>4} {'tools':>5} {'files':>5}")
         lines += [hdr, "  " + "─" * (len(hdr) - 2)]
         for c in cells:
             start = (c.get("first_ts") or "")[5:16].replace("T", " ") or "—"
             model = (c.get("model") or "—")[:24]
-            lines.append(f"  {c['vendor']:<9} {model:<24} {start:<12} {_fmt_dur(c['duration_s']):>7}"
+            role_c = f" {(c.get('role') or '—')[:8]:<8}" if any_role else ""
+            lines.append(f"  {c['vendor']:<9} {model:<24}{role_c} {start:<12} {_fmt_dur(c['duration_s']):>7}"
                          f" {_fmt_tok(c.get('in_tok')):>8} {_fmt_tok(c.get('out_tok')):>7}"
-                         f" {_fmt_tok(c.get('cache')):>7} {c['tool_calls']:>5}"
-                         f" {len(c.get('files') or []):>5}")
+                         f" {_fmt_tok(c.get('cache')):>7} {_fmt_pct(c.get('cache_pct')):>4}"
+                         f" {c['tool_calls']:>5} {len(c.get('files') or []):>5}")
         vendors = sorted({c["vendor"] for c in cells})  # 벤더 합계 (2벤더 이상 — 비교가 존재 이유)
         if len(vendors) > 1:
             lines.append("")
@@ -177,12 +256,32 @@ def render(cells: list, path: Path, window_days: float, integ: list | None = Non
                 vs = [c for c in cells if c["vendor"] == v]
                 durs = [c["duration_s"] for c in vs if c["duration_s"] is not None]
                 ins_ = [c["in_tok"] for c in vs if c.get("in_tok") is not None]
+                caches = [(c["in_tok"], c["cache"]) for c in vs
+                          if c.get("in_tok") is not None and c.get("cache") is not None]
+                pct = _cache_pct(sum(a for a, _ in caches), sum(b for _, b in caches))                     if caches else None
+                costs = [x for x in (_sess_cost(c) for c in vs) if x is not None]
+                extra = (f" · c% {_fmt_pct(pct)}" if pct is not None else "") +                         (f" · ${sum(costs):.2f}" if costs else "")
                 lines.append(_t("sum", vendor=f"{v:<7}", n=len(vs),
                                 dur=_fmt_dur(sum(durs)) if durs else "—",
                                 in_=_fmt_tok(sum(ins_)) if ins_ else "—",
                                 tools=sum(c["tool_calls"] for c in vs),
-                                files=sum(len(c.get("files") or []) for c in vs)))
+                                files=sum(len(c.get("files") or []) for c in vs)) + extra)
         lines.append(_t("legend"))
+        if any_cost:
+            lines.append(_t("cost.legend"))
+        if not reported:
+            lines.append(_t("legend.blind"))
+    if reported:  # 별도 증거 밴드 — passive와 절대 합산하지 않는다
+        lines.append(_t("rep.hdr"))
+        for r in reported:
+            rin, rc = r.get("in_tok"), r.get("cache")
+            rpct = (rc / rin * 100.0) if (rin and rc is not None and rin > 0) else None
+            lines.append(f"  {(r.get('backend') or '—'):<12} {(r.get('model') or '—')[:20]:<20}"
+                         f" {(r.get('run_status') or '—'):<9}"
+                         f" in {_fmt_tok(rin):>8} · out {_fmt_tok(r.get('out_tok')):>7}"
+                         f" · cache {_fmt_tok(rc):>7} · c% {_fmt_pct(rpct):>4}"
+                         f" · gate {(r.get('gate') or '—')}")
+        lines.append(_t("rep.legend"))
     if integ or integ_incomplete:  # core-integrity 감사 섹션 (state 불요 — 아무 폴더나)
         lines.append(_t("integ.hdr"))
         if integ_incomplete:  # 손상 manifest → 선언 core 탈락, 부분 결과임을 명시(critic 재감사3 B5-c)
@@ -204,25 +303,39 @@ def main(argv: list | None = None) -> int:
     ap.add_argument("--window", type=float, default=45, help=_t("help.window"))
     ap.add_argument("--json", action="store_true", help=_t("help.json"))
     ap.add_argument("--html", metavar="FILE", help=_t("help.html"))
+    ap.add_argument("--prices", metavar="FILE", default=None, help=_t("help.prices"))
     args = ap.parse_args(argv)
     path = Path(args.path).expanduser().resolve()
     if not path.is_dir():
         print(_t("err.nodir", path=path), file=sys.stderr)
         return 1
     cells = collect(path, args.window)
+    attribute(path, cells)              # .organum 있으면 declared cell·role 주석 (additive)
+    reported = reported_runs(path)      # ingest된 supervisor 하네스 관측 (별도 증거)
+    from organum.inspect import effective_prices
+    prices = effective_prices(args.prices)
     integ = core_integrity(path, cells)   # core-integrity 감사 (git-기반, reconstructive 세션 교차)
     from organum import integrity as _integ
     integ_incomplete = _integ.is_git_repo(path) and not _integ.manifest_ok(path / ".organum")
     if args.html:
         from organum.htmlreport import inspector_page
         out = Path(args.html).expanduser()
-        out.write_text(inspector_page(cells, path.name, args.window), encoding="utf-8")
+        out.write_text(inspector_page(cells, path.name, args.window, reported=reported),
+                       encoding="utf-8")
         print(_t("html.saved", path=out, n=len(cells)))
         return 0
-    if args.json:  # shipped 계약 유지 — sessions 리스트 그대로(케이스스터디·파이프 무손상).
-        print(json.dumps(cells, ensure_ascii=False, indent=1))  # core-integrity는 text 뷰 + observatory integrity --json
+    if args.json:  # shipped 계약 유지 — sessions 리스트 그대로(추가 필드는 additive).
+        print(json.dumps(cells, ensure_ascii=False, indent=1))  # reported는 observatory stats --source reported --json
     else:
-        print(render(cells, path, args.window, integ, integ_incomplete))
+        print(render(cells, path, args.window, integ, integ_incomplete,
+                     reported=reported, prices=prices))
+        try:  # substrate-health 한 줄 (text 뷰만 · 실패는 침묵 — 계측을 막지 않는다)
+            from organum import health as _health
+            hrep = _health.measure()
+            if hrep["findings"]:
+                print(_t("health.line", n=len(hrep["findings"])))
+        except Exception:
+            pass
     return 0
 
 

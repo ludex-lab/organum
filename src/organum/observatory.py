@@ -79,12 +79,13 @@ def _role_of_cell(cands: list) -> dict:
     조용히 승격하던 것 차단, critic 2)."""
     roles = [s.get("role") for s in cands]
     if not cands or not all(roles) or len(set(roles)) != 1:
-        return {"role": None, "intent": None, "sid": None, "loadout": None}
+        return {"role": None, "intent": None, "sid": None, "loadout": None, "problem_type": None}
     role = roles[0]
-    if len(cands) == 1:  # 유일 후보만 intent/sid/loadout 확정 — 여럿이면 대표 임의선택 금지
+    if len(cands) == 1:  # 유일 후보만 intent/sid/loadout/problem_type 확정 — 여럿이면 대표 임의선택 금지
         return {"role": role, "intent": cands[0].get("intent"), "sid": cands[0].get("sid"),
-                "loadout": cands[0].get("loadout")}
-    return {"role": role, "intent": None, "sid": None, "loadout": None}
+                "loadout": cands[0].get("loadout"),
+                "problem_type": cands[0].get("problem_type")}
+    return {"role": role, "intent": None, "sid": None, "loadout": None, "problem_type": None}
 
 
 def _declared_join(state_dir: Path, cells: list) -> dict:
@@ -137,13 +138,15 @@ def _declared_join(state_dir: Path, cells: list) -> dict:
             "declared": declared, "role": j["role"],
             "intent": j["intent"], "sid_declared": j["sid"],
             "loadout": j.get("loadout"),   # organ 집합(v0.1.1 §1) — 미조인/애매는 None
+            "problem_type": j.get("problem_type"),  # §5 taxonomy — 미조인/애매/미선언은 None
             "join_method": method, "join_status": status,
             "n_sessions": len(cand) if declared else 0,  # 조인 근거 세션 수
         }
     return out
 
 
-_ATTR_KEYS = ("declared", "role", "intent", "sid_declared", "loadout", "join_method", "join_status")
+_ATTR_KEYS = ("declared", "role", "intent", "sid_declared", "loadout", "problem_type",
+              "join_method", "join_status")
 
 
 def _attribution_changed(cur: dict, j: dict) -> bool:
@@ -215,6 +218,10 @@ def record(state_dir: Path, cells: list, reason: str,
             "declared": j.get("declared"), "role": j.get("role"),
             "intent": j.get("intent"), "sid_declared": j.get("sid_declared"),
             "loadout": j.get("loadout"),   # organ 효과 매트릭스 v0.1.1 §1 (미조인=None)
+            "problem_type": j.get("problem_type"),  # §5 문제 축 (미조인/미선언=None)
+            # §6: worker 세팅 row는 role이 problem_type을 함의(교란) — 집계기가 둘의 효과를
+            # 분리 주장할 수 없음을 주석이 아니라 필드로 강제. 미조인 row는 None(주장 자체 불가).
+            "joint_observed": True if j.get("role") else None,
             # row provenance(critic): role_basis 고정 + method/status로 5/17 미조인 이유 감사
             "role_basis": "cell-role-unique", "join_method": j.get("join_method"),
             "join_status": j.get("join_status"), "declared_sessions": j.get("n_sessions", 0),
@@ -416,11 +423,13 @@ def _sum_measured(recs: list, key: str) -> tuple[int | None, int]:
 
 
 def _cost(recs: list) -> float | None:
-    """단가표(inspect.PRICES) 있는 모델만 합산. cache 쓰기 단가는 원천 미보관 → 제외(근사)."""
-    from organum.inspect import PRICES
+    """단가표(내장+사용자 ~/.organum/prices.json) 있는 모델만 합산. cache 쓰기 단가는
+    원천 미보관 → 제외(근사). 단가는 사용자 제공(BYO) — 우리는 지어내지 않는다."""
+    from organum.inspect import effective_prices
+    prices = effective_prices()
     total, any_priced = 0.0, False
     for r in recs:
-        pr = PRICES.get(r.get("model") or "")
+        pr = prices.get(r.get("model") or "")
         if not pr:
             continue
         any_priced = True

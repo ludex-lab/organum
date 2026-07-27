@@ -167,3 +167,90 @@ def render(rep: dict, peer: str | None = None) -> str:
             who = f"{it['rater'] or '?'}·{it['direction']}"
             lines.append(f"    - {it['text']}  ({who}, {it['sid']})")
     return "\n".join(lines)
+
+
+# ── claim cell 집계 (organ-effect-matrix v0.1.1 §1·§2·§6 — effect_vector 집계기 v0) ──
+def cells(state_dir: Path, since_days: float | None = None) -> dict:
+    """observation row(passive) → claim cell 집계. 키 = brain × role × problem_type × loadout.
+
+    정직 규율(스키마 문서가 아니라 데이터 모양이 강제):
+    - **§6 joint_observed**: worker row는 role이 problem_type을 함의(교란) — 셀이 필드로
+      운반하고, role 효과와 problem_type 효과를 분리 주장할 수 없다.
+    - **§1 contrast**: 같은 (brain·role·problem_type) 안에 loadout 변주 + graded score가
+      있을 때만 파생 가능. 현 RWE row엔 score 원천이 없어 **항상 None** — contrast_status가
+      이유를 명시(no-loadout-variation | varied-no-score). 서술 셀은 organ 효과를 주장 못 한다.
+    - **cost는 C2**: 측정분만 합산 + 미측정 수 병기. evidence_grade='rwe-observational' 고정.
+    - reported row는 v0 제외(loadout/problem_type 축 부재 — 정직하게 범위 밖).
+    read-only — 집계가 기록을 남기지 않는다."""
+    from organum.observatory import load
+    rows = load(state_dir, since_days=since_days)
+    groups: dict = {}
+    for r in rows:
+        lo = r.get("loadout")
+        key = (r.get("model"), r.get("role"), r.get("problem_type"),
+               tuple(sorted(lo)) if isinstance(lo, list) else None)
+        groups.setdefault(key, []).append(r)
+    out = []
+    for key in sorted(groups, key=lambda k: (-len(groups[k]), str(k))):
+        model, role, ptype, lo = key
+        rs = groups[key]
+        cost: dict = {}
+        for k in ("in_tok", "out_tok", "cache"):
+            vals = [r[k] for r in rs if r.get(k) is not None]
+            cost[k] = sum(vals) if vals else None
+            cost[f"{k}_unmeasured"] = len(rs) - len(vals)
+        out.append({
+            "brain": model, "role": role, "problem_type": ptype,
+            "loadout": list(lo) if lo is not None else None,
+            "n": len(rs),
+            # 레거시 row(joint_observed 키 이전)도 worker 세팅 — role 있으면 joint(정직 상수)
+            "joint_observed": any(r.get("joint_observed") or r.get("role") for r in rs),
+            "declared_cells": sorted({r["declared"] for r in rs if r.get("declared")}),
+            "sessions": [r.get("session_id") for r in rs],
+            "cost": cost,
+            "tools_n": sum(sum((r.get("tools") or {}).values()) for r in rs),
+            "files_n": sum(r.get("files_touched") or 0 for r in rs),
+            "evidence_grade": "rwe-observational",
+        })
+    # contrast 파생 자리 — 같은 (brain·role·problem_type) 형제 셀에 loadout 변주가 있는가
+    by_brp: dict = {}
+    for c in out:
+        by_brp.setdefault((c["brain"], c["role"], c["problem_type"]), []).append(c)
+    for sibs in by_brp.values():
+        varied = len({tuple(c["loadout"]) if c["loadout"] is not None else None
+                      for c in sibs}) > 1
+        for c in sibs:
+            c["contrast"] = None      # graded score 원천 없음 — delta 주장 안 함 (§1 수정 B)
+            c["contrast_status"] = "varied-no-score" if varied else "no-loadout-variation"
+    return {"cells": out, "rows_n": len(rows)}
+
+
+def _fmt_mb_tok(v) -> str:
+    if v is None:
+        return "—"
+    if v >= 1_000_000:
+        return f"{v / 1_000_000:.1f}M"
+    if v >= 1_000:
+        return f"{v / 1_000:.1f}K"
+    return str(v)
+
+
+def render_cells(rep: dict) -> str:
+    lines = [f"bench cells — row {rep['rows_n']} → cell {len(rep['cells'])}"
+             " (brain × role × problem_type × loadout · evidence=rwe-observational)"]
+    if not rep["cells"]:
+        lines.append("  (observation row 없음 — observatory sync 로 시작)")
+        return "\n".join(lines)
+    for c in rep["cells"]:
+        lo = ("bare" if c["loadout"] == [] else
+              ",".join(c["loadout"]) if c["loadout"] else "—")
+        cells_s = f" · cells {','.join(c['declared_cells'])}" if c["declared_cells"] else ""
+        lines.append(f"  {c['brain'] or '—'} × {c['role'] or '—'} × {c['problem_type'] or '—'}"
+                     f" × [{lo}] — n {c['n']}{cells_s}")
+        cost = c["cost"]
+        lines.append(f"    cost: in {_fmt_mb_tok(cost['in_tok'])} · out {_fmt_mb_tok(cost['out_tok'])}"
+                     f" · cache {_fmt_mb_tok(cost['cache'])} · tools {c['tools_n']}"
+                     f" · files {c['files_n']} · contrast {c['contrast_status']}")
+    lines.append("  (joint_observed: worker row는 role↔problem_type 교란 — 분리 효과 주장 불가(§6)."
+                 " contrast 없는 셀은 서술 셀 — organ 효과 주장 없음(§1))")
+    return "\n".join(lines)

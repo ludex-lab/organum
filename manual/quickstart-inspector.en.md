@@ -43,6 +43,34 @@ A `—` where a number should be isn't zero — it means the vendor doesn't reco
 that value on disk. Token semantics differ per vendor, so the safe cross-vendor
 axes are **duration, tools, and files**.
 
+### c% — cache efficiency (the cost lever)
+
+The `c%` column is `cache/(in+cache)` — the share of input served from cache.
+The same model can preserve cache very differently under different harnesses
+(we measured 100% vs 49% on our own project), which makes this the first lever
+on API cost. Vendors that don't record it stay an honest `—`.
+
+### Cost approximation — you supply the prices
+
+organum ships no price table (prices change; inventing costs from stale numbers
+is worse than staying silent). Put per-model $/Mtok into
+`~/.organum/prices.json` (or pass `--prices <file>`) and vendor rollups gain a
+`$` approximation:
+
+```json
+{ "solar-open2": { "in": 0.5, "out": 1.5, "cache_read": 0.05 } }
+```
+
+### Role annotations and the reported band (for organum projects)
+
+If the target folder has an `.organum/`, two things appear: ① sessions gain
+their declared **role** as an annotation, and ② supervisor-harness runs
+accepted via `organum observatory ingest` show up as a separate **reported
+band** — never summed with passive metering. Supervised runs live in isolated
+runtimes that passive metering cannot see, so placing the two kinds of evidence
+side by side is the honest whole. Without `.organum/`, nothing changes — the
+zero-setup promise stands.
+
 ## See it in a browser, share it: `--html`
 
 Prefer a browser view over the terminal table, or want to hand it to someone?

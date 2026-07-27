@@ -52,6 +52,37 @@ class TestSessionModule(unittest.TestCase):
             saved = json.loads((soma / "sessions" / f"{rec['sid']}.json").read_text())
             self.assertEqual(saved["loadout"], ["relay", "guard"])
 
+    def test_problem_type_taxonomy_gate(self):
+        # problem_type(§5): None=미선언 · taxonomy 슬러그만 수용 · 자유 문자열=거부(축 발산 차단)
+        self.assertIsNone(session.validate_problem_type(None))
+        self.assertIsNone(session.validate_problem_type("  "))
+        self.assertEqual(session.validate_problem_type("seam/integration"), "seam/integration")
+        with self.assertRaises(session.SessionError):
+            session.validate_problem_type("coding")            # 자유 문자열
+        with self.assertRaises(session.SessionError):
+            session.validate_problem_type("seam")              # 부분 슬러그
+        with tempfile.TemporaryDirectory() as td:
+            soma = self._soma(td)
+            rec = session.start(soma, "engine", "engine", "의도", "# c\n",
+                                problem_type="seam/integration")
+            self.assertEqual(rec["problem_type"], "seam/integration")
+            session.end(soma)
+            got = [s for s in session.sessions_for_join(soma) if s["sid"] == rec["sid"]][0]
+            self.assertEqual(got["problem_type"], "seam/integration")
+
+    def test_problem_type_legacy_none(self):
+        # 레거시(problem_type 키 이전) 세션은 None — 미선언을 지어내지 않는다
+        with tempfile.TemporaryDirectory() as td:
+            soma = self._soma(td)
+            rec = session.start(soma, "engine", "engine", "의도", "# c\n")
+            self.assertIsNone(rec["problem_type"])
+            session.end(soma)
+            sp = soma / "sessions" / f"{rec['sid']}.json"
+            d = json.loads(sp.read_text()); d.pop("problem_type")
+            sp.write_text(json.dumps(d), encoding="utf-8")
+            got = [s for s in session.sessions_for_join(soma) if s["sid"] == rec["sid"]][0]
+            self.assertIsNone(got["problem_type"])
+
     def test_loadout_default_and_legacy_join(self):
         # 미선언=["*"] 저장 · sessions_for_join이 레거시(loadout 키 없음)를 ["*"]로 보정
         with tempfile.TemporaryDirectory() as td:
