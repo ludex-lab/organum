@@ -46,7 +46,7 @@ axes are **duration, tools, and files**.
 ### c% — cache efficiency (the cost lever)
 
 The `c%` column is `cache/(in+cache)` — the share of input served from cache.
-The same model can preserve cache very differently under different harnesses
+Cache preservation differs sharply across harness–model pairs
 (we measured 100% vs 49% on our own project), which makes this the first lever
 on API cost. Vendors that don't record it stay an honest `—`.
 
@@ -55,7 +55,7 @@ on API cost. Vendors that don't record it stay an honest `—`.
 organum ships no price table (prices change; inventing costs from stale numbers
 is worse than staying silent). Put per-model $/Mtok into
 `~/.organum/prices.json` (or pass `--prices <file>`) and vendor rollups gain a
-`$` approximation:
+`$` approximation (API pricing; subscriptions excluded):
 
 ```json
 { "solar-open2": { "in": 0.5, "out": 1.5, "cache_read": 0.05 } }
