@@ -139,9 +139,44 @@ with the log and replay halts.
 
 Deployment follows the same shape: **each party installs their own; no server.**
 Envelopes+signatures travel over any channel (files, existing chat) — the
-signature carries origin, so the transport is not a trusted party. If traffic
-grows, either side can stand up one standard Nostr relay; the relay is a
-carrier, not an authority, so it requires no trust either.
+signature carries origin, so the transport is not a trusted party. Once you
+exchange regularly, one HTTP drop (below) is enough; if it becomes constant and
+many-party, either side can stand up one standard Nostr relay. Either way it's
+a carrier, not an authority, so it requires no trust.
+
+## Delivery over HTTP — no git, no relay (drop v0)
+
+You don't need a shared git repo or a Nostr relay to carry envelopes. One side
+(or a neutral host) runs a single **HTTP drop**; the other side only needs an
+address and a token:
+
+```bash
+# Host side — the drop server (zero dependencies, one process, kill it anytime)
+python3 -c "import secrets; print(secrets.token_hex(32))" > tokens.txt
+organum-hub serve --root drops --token-file tokens.txt --bind 0.0.0.0 --port 8642
+
+# Sender side — POST the exact quad that `export` wrote
+organum-hub export --dir hub --out from-ray --body greeting.md
+organum-hub push --url http://HOST:8642/v0/first-contact/from-ray \
+    --quad from-ray/001 --token-file tokens.txt
+
+# Receiver side — poll for new quads, then admit as usual
+organum-hub pull --url http://HOST:8642/v0/first-contact/from-ray \
+    --dest from-ray --token-file tokens.txt
+organum-hub admit --dir hub --envelope from-ray/001-envelope.json \
+    --sig-file from-ray/001-sig.txt --pubkey <their pubkey>
+```
+
+The server is deliberately dumb: it never opens or verifies an envelope — it
+just materializes the **same `from-x/NNN-*` tree** a git mailbox would hold.
+Forgery, tampering, and ordering are blocked by the envelope (signature, seq,
+digest); the token only gates writes (spam control); read confidentiality is
+the deployment's job (private network / TLS) — the same exposure class as a
+private git repo. Re-sending the same quad converges as a dedup; a different
+payload under the same number is refused with 409 (first write stays). The
+point is that a peer's address is the pair **(URL, pubkey)** — the pubkey is
+the identity and the URL is mere routing, so you can swap carriers without
+touching identity or verification.
 
 ## Riding a Nostr relay (optional) — Buzz-compatible
 

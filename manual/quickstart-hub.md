@@ -134,8 +134,39 @@ append-only 이벤트 로그(`events.jsonl`)뿐이고, 매 실행이 로그를 �
 
 배포 형태도 이게 기본이에요: **각자 설치, 서버 없음.** 봉투+서명은 아무 경로로나
 나르면 되고(파일·기존 채널), 서명이 origin을 보증하니 전송로는 신뢰 대상이
-아니에요. 왕래가 잦아지면 표준 Nostr relay 하나를 어느 쪽이든 띄우면 되는데 —
-relay는 운반자지 authority가 아니라서 그것도 신뢰를 요구하지 않아요.
+아니에요. 정기적으로 주고받기 시작하면 아래의 HTTP 우체통 하나로 충분하고,
+상시·다자로 잦아지면 표준 Nostr relay를 어느 쪽이든 띄우면 됩니다 — 어느 쪽이든
+운반자지 authority가 아니라서 신뢰를 요구하지 않아요.
+
+## 전달을 HTTP로 — git도 relay도 없이 (drop v0)
+
+봉투를 나르는 데 공유 git repo나 Nostr relay가 꼭 필요한 건 아니에요. 한쪽(또는
+중립 호스트)이 **HTTP 우체통** 하나를 올리면, 상대는 주소와 토큰만 알면 됩니다:
+
+```bash
+# 호스트 쪽 — 우체통 서버 (의존성 0, 프로세스 하나, 내리면 그만)
+python3 -c "import secrets; print(secrets.token_hex(32))" > tokens.txt
+organum-hub serve --root drops --token-file tokens.txt --bind 0.0.0.0 --port 8642
+
+# 보내는 쪽 — export가 만든 quad를 그대로 POST
+organum-hub export --dir hub --out from-ray --body greeting.md
+organum-hub push --url http://HOST:8642/v0/first-contact/from-ray \
+    --quad from-ray/001 --token-file tokens.txt
+
+# 받는 쪽 — 새 quad를 폴링으로 수신 → 평소처럼 admit
+organum-hub pull --url http://HOST:8642/v0/first-contact/from-ray \
+    --dest from-ray --token-file tokens.txt
+organum-hub admit --dir hub --envelope from-ray/001-envelope.json \
+    --sig-file from-ray/001-sig.txt --pubkey <B가 보낸 pubkey>
+```
+
+서버는 일부러 멍청해요: 봉투를 열지도 검증하지도 않고, git 우체통과 **같은
+`from-x/NNN-*` 트리**를 물화할 뿐이에요. 위조·변조·순서는 봉투(서명·seq·digest)가
+막고, 토큰은 쓰기 접근(스팸 방지)만 지고, 읽기 기밀은 배치(사설망/TLS)가 집니다 —
+사설 git repo와 같은 노출 등급이에요. 같은 quad 재전송은 dedup으로 수렴하고,
+같은 번호에 다른 내용이 오면 409로 거부돼요(먼저 쓴 것이 남습니다). 상대 주소가
+**(URL, pubkey)** 한 쌍이라는 게 요점이에요 — pubkey가 신원이고 URL은 라우팅일
+뿐이라, carrier를 바꿔도 신원과 검증은 그대로예요.
 
 ## Nostr relay에 태우기 (선택) — Buzz 호환
 

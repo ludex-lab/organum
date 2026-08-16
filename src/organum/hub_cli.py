@@ -11,6 +11,7 @@
     organum-hub admit --dir hub --envelope their.json --sig … --pubkey …   # 상대 봉투
     organum-hub prove --dir hub --event-id …      # 포함 증명 → verify-proof로 오프라인 검증
     organum-hub rotate-key / revoke-key / was-valid                        # key lifecycle
+    organum-hub serve / push / pull               # git 없는 전달 — HTTP 우체통(drop v0)
 
 ## 상태 모델 — 로그가 곧 상태다
 
@@ -35,11 +36,13 @@ import time
 from pathlib import Path
 
 try:
+    from organum import hub_drop as hd
     from organum import hub_envelope as he
     from organum import hub_log as hl
     from organum import hub_wire as hw
     from organum import schnorr_pure as sp
 except ImportError:                                    # 스크립트 직접 실행 경로
+    import hub_drop as hd
     import hub_envelope as he
     import hub_log as hl
     import hub_wire as hw
@@ -431,6 +434,45 @@ def cmd_wire_in(a):
     return _print_result(r)
 
 
+def cmd_serve(a):
+    """HTTP 우체통 서버 — git 없는 전달의 수신처. 한쪽(또는 중립 호스트)이 이 한
+    줄을 올리면, 상대는 push/pull만으로 봉투를 주고받는다. 서버는 dumb하다:
+    봉투를 검증하지 않는다(검증은 수신 hub의 admit). 기본 bind는 127.0.0.1 —
+    외부 노출은 --bind 0.0.0.0을 **직접** 선택해야 한다."""
+    try:
+        srv = hd.make_server(a.root, a.token_file, bind=a.bind, port=a.port)
+    except (ValueError, OSError) as e:
+        raise HubCliError(str(e))
+    print(json.dumps({"profile": hd.DROP_PROFILE, "root": str(Path(a.root)),
+                      "bind": a.bind, "port": srv.server_address[1]},
+                     ensure_ascii=False), flush=True)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+def cmd_push(a):
+    token = hd.load_tokens(a.token_file)[0]
+    try:
+        r = hd.push_quad(a.url, token, a.quad)
+    except (ValueError, hd.DropError) as e:
+        raise HubCliError(str(e))
+    print(json.dumps(r, ensure_ascii=False))
+    return 0
+
+
+def cmd_pull(a):
+    token = hd.load_tokens(a.token_file)[0]
+    try:
+        ns = hd.pull_quads(a.url, token, a.dest, since=a.since)
+    except (ValueError, hd.DropError) as e:
+        raise HubCliError(str(e))
+    print(json.dumps({"pulled": ns, "dest": str(Path(a.dest))}, ensure_ascii=False))
+    return 0
+
+
 def _crashproof_console():
     """Windows 첫 실측 수확(2026-08-16, Ray 랩): cp949 콘솔에서 help의 em-dash가
     UnicodeEncodeError로 CLI를 죽였다. cp949는 한글을 다 담으므로 인코딩은 그대로 두고
@@ -498,6 +540,17 @@ def main(argv=None) -> int:
                                 ("--out", {"required": True}),
                                 ("--event-id", {"default": None}),
                                 ("--body", {"default": None})]),
+        ("serve", cmd_serve, [("--root", {"required": True}),
+                              ("--token-file", {"required": True}),
+                              ("--bind", {"default": "127.0.0.1"}),
+                              ("--port", {"type": int, "default": 8642})]),
+        ("push", cmd_push, [("--url", {"required": True}),
+                            ("--quad", {"required": True}),
+                            ("--token-file", {"required": True})]),
+        ("pull", cmd_pull, [("--url", {"required": True}),
+                            ("--dest", {"required": True}),
+                            ("--token-file", {"required": True}),
+                            ("--since", {"default": None})]),
         ("rotate-key", cmd_rotate_key, [("--dir", {"required": True}),
                                         ("--key", {"required": True}),
                                         ("--signer", {"required": True}),
