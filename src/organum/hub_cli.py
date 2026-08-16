@@ -286,8 +286,11 @@ def cmd_sign(a):
 def cmd_admit(a):
     d, cfg, hub = _load(a.dir, receipt_seckey=_read_seed(a.receipt_key)
                         if a.receipt_key else None)
+    if bool(a.sig) == bool(a.sig_file):
+        raise HubCliError("--sig 또는 --sig-file 중 하나만")
+    sig = a.sig or Path(a.sig_file).read_text(encoding="utf-8").strip()
     env = json.loads(Path(a.envelope).read_text(encoding="utf-8"))
-    return _print_result(_admit_and_log(d, hub, he.canonical_bytes(env), a.sig, a.pubkey))
+    return _print_result(_admit_and_log(d, hub, he.canonical_bytes(env), sig, a.pubkey))
 
 
 def cmd_rotate_key(a):
@@ -310,6 +313,49 @@ def cmd_revoke_key(a):
                           signer=a.signer, key_id=a.key_id, epoch=a.epoch,
                           subject={"type": "machine", "id": "machine:" + cfg["machine_id"]})
     return _sign_admit(d, cfg, hub, env, seed)
+
+
+def cmd_export(a):
+    """우체통 quad 내보내기 — admitted 이벤트를 transport 폴더 관례
+    (`NNN-envelope.json` + `NNN-sig.txt` [+ `NNN-body*`])로 싼다. events.jsonl에서
+    raw를 손으로 꺼내는 일이 없게 하는, 일반 채널 절차의 발신 절반."""
+    d, cfg, hub = _load(a.dir)
+    lines = [json.loads(l) for l in
+             (d / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    if not lines:
+        raise HubCliError("내보낼 admitted 이벤트가 없다")
+    if a.event_id:
+        matches = [r for r in lines if r["transport"] == "direct"
+                   and he.event_id_of(r["raw"].encode("utf-8")) == a.event_id]
+        if not matches:
+            raise HubCliError("event_id가 direct-path admitted 이벤트가 아님")
+        rec = matches[-1]
+    else:
+        rec = lines[-1]
+    if rec["transport"] != "direct":
+        raise HubCliError("wire 경유 이벤트는 wire event JSON을 그대로 전달하라 — "
+                          "quad는 direct-path용")
+    out = Path(a.out)
+    out.mkdir(parents=True, exist_ok=True)
+    used = [int(f.name[:3]) for f in out.iterdir()
+            if f.name[:3].isdigit() and len(f.name) > 3]
+    nnn = f"{(max(used) + 1) if used else 1:03d}"
+    env_p = out / f"{nnn}-envelope.json"
+    sig_p = out / f"{nnn}-sig.txt"
+    env_p.write_text(rec["raw"], encoding="utf-8")
+    sig_p.write_text(rec["sig"] + "\n", encoding="utf-8")
+    written = [str(env_p), str(sig_p)]
+    if a.body:
+        body_src = Path(a.body)
+        if not body_src.is_file():
+            raise HubCliError(f"body 파일 없음: {a.body}")
+        body_p = out / f"{nnn}-body{body_src.suffix or '.md'}"
+        body_p.write_bytes(body_src.read_bytes())
+        written.append(str(body_p))
+    print(json.dumps({"exported": written, "nnn": nnn,
+                      "event_id": he.event_id_of(rec["raw"].encode("utf-8")),
+                      "pubkey": rec["pubkey"]}, ensure_ascii=False))
+    return 0
 
 
 def cmd_list(a):
@@ -385,7 +431,20 @@ def cmd_wire_in(a):
     return _print_result(r)
 
 
+def _crashproof_console():
+    """Windows 첫 실측 수확(2026-08-16, Ray 랩): cp949 콘솔에서 help의 em-dash가
+    UnicodeEncodeError로 CLI를 죽였다. cp949는 한글을 다 담으므로 인코딩은 그대로 두고
+    **담지 못하는 문자만 ?로 대체** — 어떤 콘솔 인코딩에서도 출력이 크래시하지 않는다."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(errors="replace")
+            except (ValueError, OSError):
+                pass
+
+
 def main(argv=None) -> int:
+    _crashproof_console()
     ap = argparse.ArgumentParser(
         prog="organum-hub",
         description="서명 증거 봉투 — 수용·영수증·투명 로그 (experimental)")
@@ -431,9 +490,14 @@ def main(argv=None) -> int:
                             ("--envelope", {"required": True})]),
         ("admit", cmd_admit, [("--dir", {"required": True}),
                               ("--envelope", {"required": True}),
-                              ("--sig", {"required": True}),
+                              ("--sig", {"default": None}),
+                              ("--sig-file", {"default": None}),
                               ("--pubkey", {"required": True}),
                               ("--receipt-key", {"default": None})]),
+        ("export", cmd_export, [("--dir", {"required": True}),
+                                ("--out", {"required": True}),
+                                ("--event-id", {"default": None}),
+                                ("--body", {"default": None})]),
         ("rotate-key", cmd_rotate_key, [("--dir", {"required": True}),
                                         ("--key", {"required": True}),
                                         ("--signer", {"required": True}),

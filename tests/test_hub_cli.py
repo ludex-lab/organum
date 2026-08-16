@@ -295,3 +295,79 @@ def test_message_재전송도_수렴(capsys, ws):
     rc1, r1 = run(capsys, *args)
     rc2, r2 = run(capsys, *args)
     assert r2["duplicate"] is True and r2["accepted_seq"] == r1["accepted_seq"]
+
+
+# ═══ export — 우체통 quad (일반 채널 절차의 발신 절반, 2026-08-16) ═══════════
+
+def test_export_quad_와_수신측_admit_왕복(capsys, ws):
+    """발신: message → export가 NNN quad를 깐다. 수신: 별도 hub가 quad 파일만으로
+    admit(--sig-file) — events.jsonl 손 추출 없는 완결 루프."""
+    _setup(capsys, ws)
+    Path("g.md").write_text("인사", encoding="utf-8")
+    rc, r = run(capsys, "message", "--dir", "hub", "--key", "lab-a.seed",
+                "--signer", "lab:a", "--key-id", "k1", "--epoch", "1",
+                "--to-lab", "lab:b", "--to-id", "Aria", "--to-epoch", "1",
+                "--body-file", "g.md")
+    assert rc == 0
+    rc, ex = run(capsys, "export", "--dir", "hub", "--out", "from-a", "--body", "g.md")
+    assert rc == 0 and ex["nnn"] == "001"
+    assert Path("from-a/001-envelope.json").is_file()
+    assert Path("from-a/001-sig.txt").is_file()
+    assert Path("from-a/001-body.md").read_text(encoding="utf-8") == "인사"
+    # 번호 증가
+    Path("g2.md").write_text("둘", encoding="utf-8")
+    run(capsys, "message", "--dir", "hub", "--key", "lab-a.seed", "--signer", "lab:a",
+        "--key-id", "k1", "--epoch", "1", "--to-lab", "lab:b", "--to-id", "Aria",
+        "--to-epoch", "1", "--body-file", "g2.md")
+    rc, ex2 = run(capsys, "export", "--dir", "hub", "--out", "from-a")
+    assert ex2["nnn"] == "002"
+    # ── 수신측: 별도 hub가 quad만으로 수용 ──
+    _, a = run(capsys, "keygen", "recv-hub")
+    rc, _ = run(capsys, "init", "--dir", "hub-b", "--source-domain", "lab:b/hub")
+    rc, _ = run(capsys, "register-key", "--dir", "hub-b", "--signer", "lab:a",
+                "--key-id", "k1", "--epoch", "1",
+                "--pubkey", ex["pubkey"])
+    rc, r2 = run(capsys, "admit", "--dir", "hub-b",
+                 "--envelope", "from-a/001-envelope.json",
+                 "--sig-file", "from-a/001-sig.txt", "--pubkey", ex["pubkey"])
+    assert rc == 0 and r2["admitted"], r2
+    assert r2["event_id"] == ex["event_id"]
+
+
+def test_export_빈_로그와_sig_이중지정_거부(capsys, ws):
+    _setup(capsys, ws)
+    rc, _ = run(capsys, "export", "--dir", "hub", "--out", "o")
+    assert rc == 2                                    # 빈 로그
+    Path("g.md").write_text("x", encoding="utf-8")
+    run(capsys, "message", "--dir", "hub", "--key", "lab-a.seed", "--signer", "lab:a",
+        "--key-id", "k1", "--epoch", "1", "--to-lab", "lab:b", "--to-id", "c",
+        "--to-epoch", "1", "--body-file", "g.md")
+    run(capsys, "export", "--dir", "hub", "--out", "o")
+    rc, _ = run(capsys, "admit", "--dir", "hub", "--envelope", "o/001-envelope.json",
+                "--sig", "aa", "--sig-file", "o/001-sig.txt", "--pubkey", "b" * 64)
+    assert rc == 2                                    # --sig/--sig-file 동시 지정
+
+
+# ═══ Windows 첫 수확 — cp949 콘솔 크래시 (2026-08-16, Ray 랩 보고) ═══════════
+
+def test_cp949_콘솔에서_출력이_크래시하지_않는다():
+    """cp949 스트림에 em-dash·특수문자 출력 시 UnicodeEncodeError로 죽던 것 —
+    _crashproof_console 후에는 못 담는 문자만 ?로 대체되고 한글은 보존된다."""
+    import io
+    buf = io.BytesIO()
+    stream = io.TextIOWrapper(buf, encoding="cp949")
+    with pytest.raises(UnicodeEncodeError):
+        stream.write("서명 봉투 — 수용·영수증")           # 재현: em-dash가 죽인다
+    stream2 = io.TextIOWrapper(io.BytesIO(), encoding="cp949")
+    stream2.reconfigure(errors="replace")                  # 처방 그대로
+    stream2.write("서명 봉투 — 수용·영수증 ✓")
+    stream2.flush()
+    out = stream2.buffer.getvalue().decode("cp949")
+    assert "서명 봉투" in out and "수용" in out            # 한글 보존
+    assert "?" in out                                      # 못 담는 문자만 대체
+
+
+def test_crashproof가_main_경로에_걸려_있다(capsys, ws):
+    cli._crashproof_console()                              # 예외 없이(비콘솔 포함)
+    rc, _ = run(capsys, "keygen", "cp949-check")
+    assert rc == 0
