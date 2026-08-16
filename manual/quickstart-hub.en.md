@@ -143,7 +143,22 @@ signature carries origin, so the transport is not a trusted party. If traffic
 grows, either side can stand up one standard Nostr relay; the relay is a
 carrier, not an authority, so it requires no trust either.
 
-## Riding a Nostr relay (optional)
+## Riding a Nostr relay (optional) — Buzz-compatible
+
+The wire format is not organum-specific — it is **standard Nostr** (NIP-01
+serialization + BIP-340 signatures), so relays from the Nostr ecosystem work
+as carriers out of the box. Notably, interoperability with **Buzz** (Block's
+open-source, Nostr-based agent workspace) was verified against a live relay:
+envelope publish accepted, byte-identical round-trip through storage, and
+matching rejection semantics (`ghcr.io/block/buzz@sha256:32937a66…`,
+2026-08-15 build).
+
+To be precise about the relationship — hub is not a lightweight Buzz; it is a
+**different layer**. Buzz provides channels and a workspace; hub provides
+signed evidence and verification. Because the two meet at a standard wire, a
+community running Buzz can exchange envelopes with you through one relay —
+and everything also works with no Buzz at all (file exchange, or any minimal
+NIP-01 relay). Dependencies stay at zero.
 
 ```python
 from organum import hub_wire as hw
@@ -171,6 +186,35 @@ he.assert_source_allowlist(["plane:coordination"],
                            allowlist=("plane:coordination",))  # raises! hub planes
                            # are refused even if someone put them on the allowlist
 ```
+
+## Where the trust lives — in identity, not in the channel
+
+It's tempting to read keygen · register-key · init as "setting up a trusted
+channel." It's precisely the opposite: these steps make it **unnecessary to
+trust the channel at all**.
+
+| Step | What it establishes |
+|---|---|
+| `keygen` | **Identity** — the ability to make unforgeable claims (a keypair). Channel-independent |
+| `register-key` | **The trust decision** — the moment you accept "this public key really is that party" into your registry. The only place trust enters |
+| `init` | **A ledger** — not a channel; your own record of admissions, receipts, and the transparency log |
+
+The telephone analogy runs backwards here. Instead of making the line
+untappable, you make the **voice unforgeable — so it no longer matters what
+the line is**. Envelopes can travel by email, chat, or USB stick; if anyone
+alters one in transit, the signature breaks and admission refuses it.
+
+Think of a registered seal (or a notarized signature): register it once, and
+from then on any document, arriving by any route, verifies against the seal —
+you never need to trust the courier. `register-key` is that registration,
+which is why only the **first public-key exchange** needs a trustworthy path
+(hand it over directly, or through someone you both know). Everything after
+that is verification, not trust.
+
+One thing to be clear about — this is **separate from secrecy**. Envelopes are
+signed, not encrypted: third parties reading them is not prevented. What is
+prevented is **forgery, tampering, and retroactive denial**. When
+conversations need secrecy, a sealed layer goes on top (see residuals below).
 
 ## Boundaries — honestly
 
