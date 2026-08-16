@@ -254,3 +254,44 @@ def test_c1_잘못된_shape도_쓰기_전_거부(capsys, ws):
                 "--key-id", "k9", "--epoch", "1", "--pubkey", "e" * 64)
     assert rc == 2
     assert (ws / "hub" / "hub.json").read_bytes() == before
+
+
+# ═══ message — 만남의 기본 동사 (2026-08-16) ════════════════════════════════
+
+def test_message_봉투_본문_digest_결속(capsys, ws):
+    """원격 지인 시나리오: A가 인사말 파일을 쓰고 message로 B(수신 셀)에게 —
+    봉투가 본문 digest·수신자·발신 서명을 결속하고, 수신 쪽은 본문 sha256 대조."""
+    import hashlib as _h
+    _setup(capsys, ws)
+    Path("greeting.md").write_text("만나서 반갑습니다 — from lab:a", encoding="utf-8")
+    rc, r = run(capsys, "message", "--dir", "hub", "--key", "lab-a.seed",
+                "--signer", "lab:a", "--key-id", "k1", "--epoch", "1",
+                "--to-lab", "lab:b", "--to-id", "creature-alpha", "--to-epoch", "1",
+                "--body-file", "greeting.md")
+    assert rc == 0 and r["admitted"], r
+    # 봉투에서 본문 digest 대조 (수신 쪽이 할 일)
+    log = [json.loads(l) for l in
+           (ws / "hub" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    env = json.loads(log[-1]["raw"])
+    assert env["event_kind"] == "message.posted"
+    assert env["payload"]["target"]["to_id"] == "creature-alpha"
+    assert env["payload"]["body_sha256"] == _h.sha256(
+        Path("greeting.md").read_bytes()).hexdigest()
+    # role 격납: 이 메시지는 exact target의 lab_operator에게만 전달 가능
+    ok = he.admit_to_role("lab_operator", env, target_cell="creature-alpha",
+                          target_epoch=1)
+    assert ok["admitted"]
+    other = he.admit_to_role("lab_operator", env, target_cell="creature-beta",
+                             target_epoch=1)
+    assert not other["admitted"]
+
+
+def test_message_재전송도_수렴(capsys, ws):
+    _setup(capsys, ws)
+    Path("g.md").write_text("hi", encoding="utf-8")
+    args = ("message", "--dir", "hub", "--key", "lab-a.seed", "--signer", "lab:a",
+            "--key-id", "k1", "--epoch", "1", "--to-lab", "lab:b",
+            "--to-id", "c", "--to-epoch", "1", "--body-file", "g.md")
+    rc1, r1 = run(capsys, *args)
+    rc2, r2 = run(capsys, *args)
+    assert r2["duplicate"] is True and r2["accepted_seq"] == r1["accepted_seq"]

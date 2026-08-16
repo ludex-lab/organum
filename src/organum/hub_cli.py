@@ -249,6 +249,29 @@ def cmd_attest(a):
     return _sign_admit(d, cfg, hub, env, seed)
 
 
+def cmd_message(a):
+    """message.posted 봉투 빌더 — 만남의 기본 동사. hub는 본문을 싣지 않으므로(§5)
+    본문 파일은 봉투와 **나란히** 보내고, 봉투가 (수신자, 본문 digest, 누가·언제)를
+    서명으로 결속한다. 수신 쪽은 본문의 sha256을 봉투와 대조하면 된다."""
+    seed = _read_seed(a.key)
+    d, cfg, hub = _load(a.dir, receipt_seckey=_read_seed(a.receipt_key)
+                        if a.receipt_key else None)
+    body_p = Path(a.body_file)
+    if not body_p.is_file():
+        raise HubCliError(f"본문 파일 없음: {a.body_file}")
+    body = body_p.read_bytes()
+    digest = hashlib.sha256(body).hexdigest()
+    payload = {"target": {"lab_id": a.to_lab, "to_id": a.to_id, "to_epoch": a.to_epoch},
+               "body_locator": a.body_locator or f"file://{body_p.name}",
+               "body_sha256": digest,
+               "body_media_type": a.media_type}
+    subject_id = "message:" + digest[:24]
+    env = _build_envelope(cfg, "message.posted", payload, signer=a.signer,
+                          key_id=a.key_id, epoch=a.epoch,
+                          subject={"type": "message", "id": subject_id})
+    return _sign_admit(d, cfg, hub, env, seed)
+
+
 def cmd_sign(a):
     """봉투 파일에 서명만 — 상대에게 (envelope, sig, pubkey)를 건네는 발신 측 절반."""
     seed = _read_seed(a.key)
@@ -392,6 +415,18 @@ def main(argv=None) -> int:
                                 ("--schema-id", {"default": "raw/v1"}),
                                 ("--media-type", {"default": "application/octet-stream"}),
                                 ("--receipt-key", {"default": None})]),
+        ("message", cmd_message, [("--dir", {"required": True}),
+                                  ("--key", {"required": True}),
+                                  ("--signer", {"required": True}),
+                                  ("--key-id", {"required": True}),
+                                  ("--epoch", {"type": int, "required": True}),
+                                  ("--to-lab", {"required": True}),
+                                  ("--to-id", {"required": True}),
+                                  ("--to-epoch", {"type": int, "required": True}),
+                                  ("--body-file", {"required": True}),
+                                  ("--body-locator", {"default": None}),
+                                  ("--media-type", {"default": "text/markdown"}),
+                                  ("--receipt-key", {"default": None})]),
         ("sign", cmd_sign, [("--key", {"required": True}),
                             ("--envelope", {"required": True})]),
         ("admit", cmd_admit, [("--dir", {"required": True}),
