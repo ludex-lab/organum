@@ -576,7 +576,11 @@ class TestReport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             sd = _state(td)
             fresh = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            observatory.record(sd, [_c(sid="old-mara", last_ts="2026-07-10T10:00:00Z",
+            # 과거 세션은 상대 시각으로 — 달력 고정 날짜는 30일 창이 굴러가면
+            # 시한폭탄이 된다(2026-08-16 실측: 7/10 고정값이 창 밖으로 빠져 실패).
+            old_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                                   time.gmtime(time.time() - 10 * 86400))
+            observatory.record(sd, [_c(sid="old-mara", last_ts=old_ts,
                                        out_tok=9_000_000, model="m-big")], "sync")
             observatory.record(sd, [_c(sid="today-x", last_ts=fresh, out_tok=50)], "sync")
             orig = adapters.snapshot
@@ -922,6 +926,57 @@ class TestIngestCriticA21(unittest.TestCase):
         self.assertTrue(observatory.validate_observation(rec))
         rec["coordination"]["receipt"] = None
         self.assertFalse(observatory.validate_observation(rec))
+
+    def test_native_tool_approval_confound_additive(self):
+        # S16 additive: null/생략(구 레코드)=valid · 유효 집계=valid · 보존 위반·금지 필드·
+        # latency 비정합=invalid (count-conservation은 superRefine 등가 — A2.1 패턴)
+        ok_agg = {"schema": "organum-code/native-tool-approval-confound/v1",
+                  "productSurface": "cli-print-hook-projection", "presentations": 1,
+                  "allowOnce": 1, "rejectOnce": 0, "cancelled": 0,
+                  "latencyMs": {"count": 1, "sum": 42, "max": 42},
+                  "decider": {"kind": "human", "presenter": "organum-code-terminal"}}
+        self.assertFalse(observatory.validate_observation(
+            _obs_v1(discipline__nativeToolApproval=None)))
+        self.assertFalse(observatory.validate_observation(
+            _obs_v1(discipline__nativeToolApproval=dict(ok_agg))))
+        bad_cons = dict(ok_agg, presentations=0)
+        self.assertTrue(observatory.validate_observation(
+            _obs_v1(discipline__nativeToolApproval=bad_cons)))
+        bad_extra = dict(ok_agg)
+        bad_extra["command"] = "rm -rf /"                  # 금지 필드 — strict 거부
+        self.assertTrue(observatory.validate_observation(
+            _obs_v1(discipline__nativeToolApproval=bad_extra)))
+        # producer Zod 4규칙 exact 등가 (reconciliation: 느슨한 부등식이 false-accept
+        # 3종을 통과시켰다 — latency 측정 소실·provenance 오기/소실)
+        self.assertTrue(observatory.validate_observation(   # ② count != presentations
+            _obs_v1(discipline__nativeToolApproval=dict(
+                ok_agg, latencyMs={"count": 0, "sum": 0, "max": 0}))))
+        self.assertTrue(observatory.validate_observation(   # ③ 비활성인데 decider 존재
+            _obs_v1(discipline__nativeToolApproval=dict(
+                ok_agg, presentations=0, allowOnce=0,
+                latencyMs={"count": 0, "sum": 0, "max": 0}))))
+        self.assertTrue(observatory.validate_observation(   # ④ 활성인데 decider null
+            _obs_v1(discipline__nativeToolApproval=dict(ok_agg, decider=None))))
+        inactive_ok = dict(ok_agg, presentations=0, allowOnce=0, decider=None,
+                           latencyMs={"count": 0, "sum": 0, "max": 0})
+        self.assertFalse(observatory.validate_observation(  # 정상 비활성 = valid
+            _obs_v1(discipline__nativeToolApproval=inactive_ok)))
+
+    def test_native_tool_approval_flat_row(self):
+        # flat row에 additive 노출 — 승인 confound가 측정으로 흐른다 (B2/Q8)
+        with tempfile.TemporaryDirectory() as td:
+            sd = _state(td)
+            agg = {"schema": "organum-code/native-tool-approval-confound/v1",
+                   "productSurface": "cli-print-wrapper-projection", "presentations": 1,
+                   "allowOnce": 0, "rejectOnce": 1, "cancelled": 0,
+                   "latencyMs": {"count": 1, "sum": 7, "max": 7},
+                   "decider": {"kind": "policy",
+                               "policyId": "organum-native-noninteractive-deny",
+                               "policyVersion": "1.0.0"}}
+            observatory.ingest_report(sd, _obs_v1(discipline__nativeToolApproval=agg))
+            r = observatory.load_reported(sd)[0]
+            self.assertEqual(r["native_tool_approval"]["rejectOnce"], 1)
+            self.assertEqual(r["native_tool_approval"]["decider"]["kind"], "policy")
 
     def test_nonfinite_costusd_rejected(self):
         for bad in (float("nan"), float("inf"), float("-inf")):

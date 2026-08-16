@@ -712,6 +712,37 @@ def validate_observation(record: dict) -> list[str]:
         errs.append("responses > requests")
     if _obs_get(record, "provenance", "observationSource") != "reported":
         errs.append("provenance.observationSource != reported")
+    # ── native tool approval confound (S16 additive) — superRefine 등가 (A2.1 패턴:
+    # cross-field는 projection에 표현 불가). **producer Zod 4규칙과 exact 등가**
+    # (reconciliation: 느슨한 부등식이 false-accept 3종을 통과시켰다 — 측정 지워짐·
+    # provenance 오기. 규칙은 producer 정본을 그대로 옮긴다, 더 느슨해도 더 엄격해도 안 됨):
+    #   ① allowOnce+rejectOnce+cancelled == presentations
+    #   ② latencyMs.count == presentations
+    #   ③ presentations == 0 → latency sum/max = 0 ∧ decider is null
+    #   ④ presentations == 1 → decider non-null ∧ latencyMs.max ≤ latencyMs.sum
+    nta = _obs_get(record, "discipline", "nativeToolApproval")
+    if isinstance(nta, dict):
+        pres = nta.get("presentations")
+        dec = [nta.get(k) for k in ("allowOnce", "rejectOnce", "cancelled")]
+        lm = nta.get("latencyMs")
+        decider = nta.get("decider")
+        if isinstance(pres, int) and all(isinstance(x, int) for x in dec):
+            if sum(dec) != pres:                                              # ①
+                errs.append("nativeToolApproval: presentations != allowOnce+rejectOnce+cancelled")
+        if isinstance(pres, int) and isinstance(lm, dict):
+            c_, s_, m_ = lm.get("count"), lm.get("sum"), lm.get("max")
+            if all(isinstance(x, int) for x in (c_, s_, m_)):
+                if c_ != pres:                                                # ②
+                    errs.append("nativeToolApproval: latencyMs.count != presentations")
+                if pres == 0 and (s_ != 0 or m_ != 0):                        # ③ (latency)
+                    errs.append("nativeToolApproval: presentations=0인데 latency sum/max non-zero")
+                if pres == 1 and m_ > s_:                                     # ④ (latency)
+                    errs.append("nativeToolApproval: latencyMs.max > latencyMs.sum")
+        if isinstance(pres, int):
+            if pres == 0 and decider is not None:                             # ③ (decider)
+                errs.append("nativeToolApproval: presentations=0인데 decider non-null")
+            if pres == 1 and decider is None:                                 # ④ (decider)
+                errs.append("nativeToolApproval: presentations=1인데 decider null")
     return errs
 
 
@@ -895,6 +926,8 @@ def load_reported(state_dir: Path, since_days: float | None = None) -> list:
             "eval": g("evaluation", "name"), "scenario": g("evaluation", "scenario"),
             "preregistration_id": g("run", "preregistrationId"),
             "prior_failure": g("provenance", "source", "priorFailure"),
+            # S16 additive: 승인 confound 집계(null=승인 표면 비활성·구 레코드 생략=null 의미)
+            "native_tool_approval": g("discipline", "nativeToolApproval"),
             "origin": "reported",  # passive origin(terminal/subagent)과 구분되는 라벨
         })
     recs = sorted(out, key=lambda r: r.get("last_ts") or "")

@@ -1,0 +1,192 @@
+# organum hub — signed evidence envelopes, 5-minute quickstart
+
+*한국어판: [quickstart-hub.md](quickstart-hub.md)*
+
+When agent workspaces (labs) make claims to each other — "we froze this file",
+"we ran this measurement with this tool version" — you often want those claims
+recorded in a form anyone can verify later. organum hub is that layer:
+**signed envelopes + signed receipts + a transparency log**, so *who claimed
+what, in which order* survives without forgery or retroactive edits.
+
+Equally important is what hub is **not**: it is not a chat channel (bodies are
+never carried — only locators and digests), and it is not a server (it's a pure
+Python library plus optional adapters). Transport is up to you — files work,
+and so does any standard Nostr relay.
+
+> **Experimental.** The spec went through multi-lab adversarial review and is
+> frozen as a local reference (envelope v0.2 · wire v1), with an explicit
+> residual list (bottom of this page). Zero external dependencies —
+> standard library only.
+
+## Install
+
+```bash
+pip install organum        # 0.3.0+ ships the hub modules and the organum-hub CLI
+```
+
+## The 5-minute cut: one envelope, all the way to a receipt
+
+```python
+import hashlib
+from organum import hub_envelope as he
+from organum import hub_log as hl
+from organum import schnorr_pure as sp
+
+# 1) Keys — a lab signing key and a hub receipt key (demo seeds; use an OS
+#    keystore in production)
+lab_seed = hashlib.sha256(b"my-lab-demo-seed").digest()
+hub_seed = hashlib.sha256(b"my-hub-demo-seed").digest()
+lab_pub = sp.public_key(lab_seed).hex()
+
+# 2) Registries — who (keys) may claim what (claim types)
+keys = he.KeyRegistry()
+keys.register(lab_pub, signer_id="lab:demo", key_id="k1", key_epoch=1)
+claims_doc = {"claims": {
+    "core:artifact.frozen": {
+        "act_class": "self_attesting", "subject_types": ["artifact"],
+        "ordering_levels": ["emission"], "capture_required": False,
+        "revocation_authority": "same_signer"}}}
+claims = he.ClaimRegistry(claims_doc, expected_sha256=he.canonical_sha(claims_doc))
+
+# 3) The hub — admission, transparency log, and signed receipts as one unit
+hub = he.HubIndex(key_registry=keys, claim_registry=claims,
+                  log=hl.TransparencyLog(), receipt_seckey=hub_seed,
+                  source_domain="demo-hub/local")
+
+# 4) An envelope — the claim "we froze this file (sha256)"
+env = {"envelope_schema": he.ENVELOPE_SCHEMA, "event_kind": "artifact.attested",
+       "signer": {"id": "lab:demo", "key_id": "k1", "key_epoch": 1},
+       "subject": {"type": "artifact", "id": "artifact:prereg-v1"},
+       "provenance": {"lab": "lab:demo", "machine": "m-01", "platform": "darwin",
+                      "adapter": "organum-hub/0.1", "cli_version": None, "capture": None},
+       "idempotency_key": "demo-1", "created_at": "2026-08-16T00:00:00Z",
+       "payload": {"artifact": {"role": "prereg", "schema_id": "demo/v1",
+                                "sha256": "a" * 64, "byte_length": 1234,
+                                "media_type": "application/json"},
+                   "bindings": [], "causal": {},
+                   "claim": {"type": "core:artifact.frozen", "scope": "demo",
+                             "attests_ordering_of": "emission",
+                             "evidence_basis": {"method": "raw-bytes-sha256",
+                                                "verifier_schema": "demo/v1",
+                                                "body_custody": "repo",
+                                                "locator_authority": False}}}}
+raw = he.canonical_bytes(env)                          # these bytes ARE the identity
+sig = sp.sign(hashlib.sha256(raw).digest(), lab_seed)  # the lab signs
+
+# 5) Admission → signed receipt
+r = hub.admit(raw, sig.hex(), lab_pub)
+print(r["admitted"], r["accepted_seq"])                # True 1
+rc = r["receipt"]
+he.verify_relay_receipt(rc, sp.public_key(hub_seed),
+                        expected_source_domain="demo-hub/local")   # True
+```
+
+Now try the three properties that define hub's character:
+
+```python
+# Tampering does not get in — one byte off, quarantined at the signature stage
+bad = raw[:-2] + b'"}'
+hub.admit(bad, sig.hex(), lab_pub)["admitted"]         # False
+
+# Resending is not a new event — it converges to the first admission
+hub.admit(raw, sig.hex(), lab_pub)["duplicate"]        # True
+
+# The receipt's root is a proof, not a promise — inclusion actually verifies
+body = rc["body"]
+proof = hub.log.inclusion_proof(body["accepted_seq"] - 1, body["tree_size"])
+hl.verify_inclusion(raw, body["accepted_seq"] - 1, body["tree_size"],
+                    proof, bytes.fromhex(body["root"]))            # True
+```
+
+## With the CLI: the two-party exchange loop
+
+Everything above works from the command line. Two parties — A runs a hub,
+B is external:
+
+```bash
+# A's side — keys and hub
+organum-hub keygen lab-a && organum-hub keygen hub-receipt
+organum-hub init --dir hub --source-domain lab:a/hub
+organum-hub register-key --dir hub --signer lab:a --key-id k1 --epoch 1 \
+    --pubkey $(cat lab-a.pub)
+organum-hub register-key --dir hub --signer lab:b --key-id k1 --epoch 1 \
+    --pubkey <pubkey B sent over>
+
+# A attests a file — admission + signed receipt
+organum-hub attest --dir hub --key lab-a.seed --signer lab:a --key-id k1 --epoch 1 \
+    --file prereg.json --claim core:artifact.frozen --scope demo \
+    --receipt-key hub-receipt.seed
+
+# Admit an envelope B signed on their side (with `organum-hub sign`)
+organum-hub admit --dir hub --envelope b-envelope.json --sig <hex> --pubkey <hex>
+
+# Cut an inclusion proof for B — B verifies offline
+organum-hub prove --dir hub --event-id <id> > proof.json
+organum-hub verify-proof --envelope a-envelope.json --proof proof.json
+
+# Key rotation and revocation — history is kept; "was it valid then?" is queryable
+organum-hub rotate-key --dir hub --key lab-b.seed --signer lab:b --key-id k1 --epoch 1 \
+    --new-key-id k2 --new-epoch 2 --new-pubkey <hex>
+organum-hub revoke-key --dir hub --key lab-b2.seed --signer lab:b --key-id k2 --epoch 2 \
+    --revoke-key-id k1 --revoke-epoch 1
+organum-hub was-valid --dir hub --pubkey <hex> --seq 2
+```
+
+The state model is deliberately simple: **the log is the state.** The state
+directory holds a config (`hub.json`) and an append-only event log
+(`events.jsonl`); every run replays the log to reconstruct the index. Tamper
+with the log and replay halts.
+
+Deployment follows the same shape: **each party installs their own; no server.**
+Envelopes+signatures travel over any channel (files, existing chat) — the
+signature carries origin, so the transport is not a trusted party. If traffic
+grows, either side can stand up one standard Nostr relay; the relay is a
+carrier, not an authority, so it requires no trust either.
+
+## Riding a Nostr relay (optional)
+
+```python
+from organum import hub_wire as hw
+
+ev = hw.build_wire_event(raw, seckey=lab_seed, created_at=1755300000)
+# → a standard Nostr event: kind 1 + [["t","organum-hub-v1"]]. Publish to a relay.
+
+# Receiving side: take the event exactly as the relay returned it —
+r = hw.admit_wire(hub, ev)     # wire signature → carrier check → same admission path
+r["receipt"]["body"]["wire_event_id"]      # receipt binds BOTH identities
+```
+
+The NIP-01 wire signature is the outer authority — the receiver never re-signs.
+If the same envelope is resent with a different `created_at` (different wire
+id), it still converges to the first admission.
+
+## One piece of subject protection
+
+If hub content leaks into a measured agent's context, the measurement is
+contaminated. There is a structural assert for that — not a policy sentence:
+
+```python
+he.assert_source_allowlist(["task:mission"], allowlist=("task:mission",))  # OK
+he.assert_source_allowlist(["plane:coordination"],
+                           allowlist=("plane:coordination",))  # raises! hub planes
+                           # are refused even if someone put them on the allowlist
+```
+
+## Boundaries — honestly
+
+- **The threat model is good-faith**: this blocks self-deception and
+  retroactive narratives, not malicious participants. The signature
+  implementation (`schnorr_pure`) is standard BIP-340 but not constant-time;
+  in adversarial settings swap in an audited library (format-compatible).
+- **Deployment boundary is lab-only**: designed around body-free envelopes.
+  Public relays and sensitive payloads are outside this version's approval.
+- **Explicit residuals** (next scope, not hidden defects): capture resolver
+  (value↔bytes), sealed messages, storage concurrency, unwind/dispute.
+  Key lifecycle ("was it valid then?") shipped in 0.3.0
+  (`rotate-key`/`revoke-key`/`was-valid`).
+
+## Further reading
+
+The spec (envelope v0.2 · wire v1) and its verification history (multi-lab
+adversarial critique, live relay interop evidence) live in the development
+repository; curated public versions will land next to this manual.

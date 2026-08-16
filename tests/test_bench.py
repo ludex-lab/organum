@@ -221,6 +221,43 @@ class TestCells(unittest.TestCase):
         rep = bench.cells(self.state_dir)
         self.assertTrue(rep["cells"][0]["joint_observed"])
 
+    def _reported(self, rid_suffix="a", cell="lens", role="critic"):
+        import test_observatory as tob
+        from organum import observatory as _o
+        rec = tob._obs_v1(run__id="ocobs-" + rid_suffix * 64,
+                          identity__canonicalCell=cell, identity__role=role)
+        _o.ingest_report(self.state_dir, rec)
+
+    def _declare_session(self, cell, role="critic", loadout="graphify",
+                         ptype="discovery/navigation"):
+        soma = st.ensure_soma(self.state_dir, cell)
+        session.start(soma, cell, role, "s", "# c\n", loadout=loadout, problem_type=ptype)
+        session.end(soma)
+
+    def test_reported_rows_join_axes_and_stay_separate(self):
+        # reported row가 선언 세션에서 loadout/problem_type을 조인하되, source가 셀 키 축이라
+        # 같은 축의 passive 셀과 절대 안 섞인다(증거 분리)
+        self._declare_session("lens")
+        self._reported(cell="lens", role="critic")
+        self._row("p1", model="solar-open2", role="critic", ptype="discovery/navigation",
+                  loadout=("graphify",), declared="lens")
+        rep = bench.cells(self.state_dir)
+        srcs = {(c["source"], tuple(c["loadout"] or [])) for c in rep["cells"]}
+        self.assertIn(("reported", ("graphify",)), srcs)   # 조인 성공
+        self.assertIn(("passive", ("graphify",)), srcs)    # 분리 유지(셀 2개)
+        rc = next(c for c in rep["cells"] if c["source"] == "reported")
+        self.assertEqual(rc["problem_type"], "discovery/navigation")
+        self.assertTrue(rc["joint_observed"])
+
+    def test_reported_role_mismatch_fail_closed(self):
+        # 선언 세션 role(engine) ≠ reported role(critic) → 축 None (오귀속 금지)
+        self._declare_session("lens", role="engine")
+        self._reported(cell="lens", role="critic")
+        rep = bench.cells(self.state_dir)
+        rc = next(c for c in rep["cells"] if c["source"] == "reported")
+        self.assertIsNone(rc["loadout"])
+        self.assertIsNone(rc["problem_type"])
+
     def test_render_cells_smoke(self):
         self._row("s1")
         out = bench.render_cells(bench.cells(self.state_dir))

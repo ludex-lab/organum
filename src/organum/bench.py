@@ -180,19 +180,38 @@ def cells(state_dir: Path, since_days: float | None = None) -> dict:
       있을 때만 파생 가능. 현 RWE row엔 score 원천이 없어 **항상 None** — contrast_status가
       이유를 명시(no-loadout-variation | varied-no-score). 서술 셀은 organ 효과를 주장 못 한다.
     - **cost는 C2**: 측정분만 합산 + 미측정 수 병기. evidence_grade='rwe-observational' 고정.
-    - reported row는 v0 제외(loadout/problem_type 축 부재 — 정직하게 범위 밖).
+    - **passive/reported 분리 유지**: reported row도 집계하되 **source가 셀 키의 축** —
+      usage 의미가 다른 두 증거(transcript 파생 vs broker 계측)는 같은 셀로 절대 안 섞인다.
+      reported의 loadout/problem_type은 declared cell의 선언 세션에서 단일-후보 규율로 조인
+      (세션 role ≠ reported role이면 fail-closed로 축 None).
     read-only — 집계가 기록을 남기지 않는다."""
-    from organum.observatory import load
-    rows = load(state_dir, since_days=since_days)
+    from organum import session as _sess
+    from organum.observatory import _role_of_cell, load, load_reported
+    from organum.state import cell_key
+    rows = [dict(r, _source="passive") for r in load(state_dir, since_days=since_days)]
+    by_cell: dict = {}
+    for sess in _sess.sessions_for_join(state_dir):
+        c = sess.get("cell")
+        if isinstance(c, str) and c:
+            by_cell.setdefault(cell_key(c), []).append(sess)
+    for r in load_reported(state_dir, since_days=since_days):
+        rr = dict(r, _source="reported", loadout=None, problem_type=None)
+        d = r.get("declared")
+        if isinstance(d, str) and d:
+            j = _role_of_cell(by_cell.get(cell_key(d)) or [])
+            if j["role"] and r.get("role") and j["role"] == r["role"]:
+                rr["loadout"] = j.get("loadout")
+                rr["problem_type"] = j.get("problem_type")
+        rows.append(rr)
     groups: dict = {}
     for r in rows:
         lo = r.get("loadout")
         key = (r.get("model"), r.get("role"), r.get("problem_type"),
-               tuple(sorted(lo)) if isinstance(lo, list) else None)
+               tuple(sorted(lo)) if isinstance(lo, list) else None, r["_source"])
         groups.setdefault(key, []).append(r)
     out = []
     for key in sorted(groups, key=lambda k: (-len(groups[k]), str(k))):
-        model, role, ptype, lo = key
+        model, role, ptype, lo, source = key
         rs = groups[key]
         cost: dict = {}
         for k in ("in_tok", "out_tok", "cache"):
@@ -202,11 +221,12 @@ def cells(state_dir: Path, since_days: float | None = None) -> dict:
         out.append({
             "brain": model, "role": role, "problem_type": ptype,
             "loadout": list(lo) if lo is not None else None,
+            "source": source,
             "n": len(rs),
             # 레거시 row(joint_observed 키 이전)도 worker 세팅 — role 있으면 joint(정직 상수)
             "joint_observed": any(r.get("joint_observed") or r.get("role") for r in rs),
             "declared_cells": sorted({r["declared"] for r in rs if r.get("declared")}),
-            "sessions": [r.get("session_id") for r in rs],
+            "sessions": [r.get("session_id") or r.get("run_id") for r in rs],
             "cost": cost,
             "tools_n": sum(sum((r.get("tools") or {}).values()) for r in rs),
             "files_n": sum(r.get("files_touched") or 0 for r in rs),
@@ -214,8 +234,8 @@ def cells(state_dir: Path, since_days: float | None = None) -> dict:
         })
     # contrast 파생 자리 — 같은 (brain·role·problem_type) 형제 셀에 loadout 변주가 있는가
     by_brp: dict = {}
-    for c in out:
-        by_brp.setdefault((c["brain"], c["role"], c["problem_type"]), []).append(c)
+    for c in out:  # contrast 형제 = 같은 (brain·role·problem_type·source) — 증거 종류 안 섞음
+        by_brp.setdefault((c["brain"], c["role"], c["problem_type"], c["source"]), []).append(c)
     for sibs in by_brp.values():
         varied = len({tuple(c["loadout"]) if c["loadout"] is not None else None
                       for c in sibs}) > 1
@@ -244,9 +264,9 @@ def render_cells(rep: dict) -> str:
     for c in rep["cells"]:
         lo = ("bare" if c["loadout"] == [] else
               ",".join(c["loadout"]) if c["loadout"] else "—")
-        cells_s = f" · cells {','.join(c['declared_cells'])}" if c["declared_cells"] else ""
-        lines.append(f"  {c['brain'] or '—'} × {c['role'] or '—'} × {c['problem_type'] or '—'}"
-                     f" × [{lo}] — n {c['n']}{cells_s}")
+        cells_s = f" · cells {','.join(c['declared_cells'][:3])}" if c["declared_cells"] else ""
+        lines.append(f"  [{c['source']}] {c['brain'] or '—'} × {c['role'] or '—'}"
+                     f" × {c['problem_type'] or '—'} × [{lo}] — n {c['n']}{cells_s}")
         cost = c["cost"]
         lines.append(f"    cost: in {_fmt_mb_tok(cost['in_tok'])} · out {_fmt_mb_tok(cost['out_tok'])}"
                      f" · cache {_fmt_mb_tok(cost['cache'])} · tools {c['tools_n']}"

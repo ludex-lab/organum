@@ -493,6 +493,135 @@
     "discipline": {
       "type": "object",
       "properties": {
+        "nativeToolApproval": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "schema": {
+                  "type": "string",
+                  "const": "organum-code/native-tool-approval-confound/v1"
+                },
+                "productSurface": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._:@/-]{0,510}[A-Za-z0-9])?$"
+                },
+                "presentations": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "allowOnce": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "rejectOnce": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "cancelled": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "latencyMs": {
+                  "type": "object",
+                  "properties": {
+                    "count": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "sum": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 86400000
+                    },
+                    "max": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 86400000
+                    }
+                  },
+                  "required": [
+                    "count",
+                    "sum",
+                    "max"
+                  ],
+                  "additionalProperties": false
+                },
+                "decider": {
+                  "anyOf": [
+                    {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "human"
+                            },
+                            "presenter": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._:@/-]{0,510}[A-Za-z0-9])?$"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "presenter"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "kind": {
+                              "type": "string",
+                              "const": "policy"
+                            },
+                            "policyId": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._:@/-]{0,510}[A-Za-z0-9])?$"
+                            },
+                            "policyVersion": {
+                              "type": "string",
+                              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._+-]{0,126}[A-Za-z0-9])?$"
+                            }
+                          },
+                          "required": [
+                            "kind",
+                            "policyId",
+                            "policyVersion"
+                          ],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "schema",
+                "productSurface",
+                "presentations",
+                "allowOnce",
+                "rejectOnce",
+                "cancelled",
+                "latencyMs",
+                "decider"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "commands": {
           "maxItems": 256,
           "type": "array",
