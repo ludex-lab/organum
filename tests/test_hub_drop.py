@@ -4,7 +4,8 @@
 1. 서버는 같은 `from-x/NNN-*` 트리를 물화한다(수신 어댑터 무변경의 근거).
 2. 서버는 dumb하다 — 봉투 검증은 수신 hub의 admit이 하고, 실제로 admit이 성공한다.
 3. 접근은 토큰이 지고(401), 같은 n 재전송은 dedup 수렴, 다른 내용은 409(먼저 쓴
-   것이 남는다), 경로·크기 위생은 400/413.
+   것이 남는다), 경로·크기 위생은 400/413, 토큰별 rate limit 초과는 429(+Retry-After)
+   — hosted(gated) 티어의 비용 유계.
 """
 
 import base64
@@ -187,3 +188,46 @@ def test_빈_토큰_파일은_서버를_열지_않는다(tmp_path):
     tok.write_text("# 주석뿐\n", encoding="utf-8")
     with pytest.raises(ValueError, match="열린 우체통"):
         hd.make_server(tmp_path / "r", tok, port=0)
+
+
+def test_rate_limiter_고정_창_회전과_끔():
+    now = [0.0]
+    rl = hd.RateLimiter(2, clock=lambda: now[0])
+    assert rl.check("t") is None and rl.check("t") is None   # 예산 2 소비
+    assert rl.check("t") == 60                               # 창 첫머리 초과 → 60초
+    now[0] = 59.0
+    assert rl.check("t") == 1                                # 창 끝머리 → 1초
+    now[0] = 60.0
+    assert rl.check("t") is None                             # 창 회전 → 예산 복원
+    assert rl.check("다른멤버") is None                      # 키는 토큰별
+    assert hd.RateLimiter(0).check("t") is None              # 0 = 끔(self-host P2P)
+
+
+def test_rate_limit_초과는_429_Retry_After_401은_예산을_안_먹고_토큰별_독립(tmp_path):
+    tok = tmp_path / "tokens.txt"
+    tok.write_text("member-a\nmember-b\n", encoding="utf-8")
+    srv = hd.make_server(tmp_path / "drops", tok, bind="127.0.0.1", port=0,
+                         rate_limit_per_minute=2)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        host = f"127.0.0.1:{srv.server_address[1]}"
+
+        def get(token):
+            conn = http.client.HTTPConnection(host, timeout=10)
+            conn.request("GET", "/v0/ch/from-a",
+                         headers={"Authorization": f"Bearer {token}"})
+            resp = conn.getresponse()
+            resp.read()
+            retry = resp.getheader("Retry-After")
+            conn.close()
+            return resp.status, retry
+
+        assert get("member-a")[0] == 200
+        assert get("wrong")[0] == 401                # 비멤버는 예산과 무관
+        assert get("member-a")[0] == 200             # 401이 예산을 안 먹은 증거
+        status, retry = get("member-a")
+        assert status == 429
+        assert retry is not None and 1 <= int(retry) <= 60
+        assert get("member-b")[0] == 200             # 다른 멤버는 독립 예산
+    finally:
+        srv.shutdown()

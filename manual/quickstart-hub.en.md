@@ -178,6 +178,26 @@ point is that a peer's address is the pair **(URL, pubkey)** — the pubkey is
 the identity and the URL is mere routing, so you can swap carriers without
 touching identity or verification.
 
+### If you keep a drop running (0.4.1)
+
+The default path is always self-host: it works as soon as one side accepts
+inbound connections, and it adds no cost and no server trust. But when both
+sides sit behind NAT (picture a laptop on a moving ship), you either punch a
+tunnel or put the drop on a **neutral host**. Three rules for that case:
+
+- **Gated, not open**: a neutral-host drop closes membership by token
+  issuance. Since 0.4.1 each token (= member) gets a per-minute budget —
+  default 60, excess answered with `429` and `Retry-After` — so cost stays
+  bounded by member count. A self-hosted drop among friends can turn it off
+  with `--rate-limit 0`.
+- **The durable layer is the deployment's job**: `--root` is the drop's only
+  state. Whether you attach a persistent disk or mirror to external storage,
+  any loss window must be bounded and detectable, and recovery belongs to the
+  sender: **if there is no reply, re-push.** Dedup makes it idempotent and
+  always safe.
+- **One honest line**: until a sealed layer lands, a neutral host's operator
+  can read envelope bodies. Don't put secrets on a server you don't trust.
+
 ## Riding a Nostr relay (optional) — Buzz-compatible
 
 The wire format is not organum-specific — it is **standard Nostr** (NIP-01

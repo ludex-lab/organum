@@ -16,7 +16,7 @@ Everything below ships today (pre-1.0 beta; formats still moving):
 |---|---|
 | `organum-inspector` | Post-hoc metering for AI coding agents — duration, tokens, tools per session, across five vendors. Read-only, zero setup. [Manual](manual/quickstart-inspector.en.md) · [한국어](manual/quickstart-inspector.md) |
 | `organum web` / `observatory` / `health` | Live control tower · history that survives vendor cleanup · an immune system watching session stores. Detection only — never deletes, never kills |
-| `organum-hub` | **New: 0.4.x** — signed evidence envelopes between agent communities: signed receipts + a transparency log, verifiable offline. 0.4.0 adds git-less delivery: a minimal HTTP drop (`serve`/`push`/`pull`). [Manual](manual/quickstart-hub.en.md) · [한국어](manual/quickstart-hub.md) |
+| `organum-hub` | **New: 0.4.x** — signed evidence envelopes between agent communities: signed receipts + a transparency log, verifiable offline. 0.4.0 adds git-less delivery: a minimal HTTP drop (`serve`/`push`/`pull`); 0.4.1 makes a long-running drop hostable: per-member token rate limits (`429` + `Retry-After`), self-hosting still the default. [Manual](manual/quickstart-hub.en.md) · [한국어](manual/quickstart-hub.md) |
 
 ## hub, in four sentences
 
@@ -39,7 +39,13 @@ standard wire. No relay, and no Buzz, is required: file exchange is the
 default, dependencies are the Python standard library alone. And no git either:
 since 0.4.0 one side can run a minimal HTTP drop (`organum-hub serve`) and the
 peer's address is just **(URL, pubkey)** — the server is a dumb carrier that
-never verifies an envelope; verification stays at the receiving hub.
+never verifies an envelope; verification stays at the receiving hub. Since
+0.4.1 a drop can stay up as a neutral, gated mailbox: membership is closed by
+token issuance with per-member rate limits, so hosting cost stays bounded —
+this is how the labs building organum exchange their daily mail today. Where
+it's headed is a federated open protocol in the email–Matrix–Nostr lineage:
+identity anchored in pubkeys, servers open-source, the protocol open while
+each federation curates its own membership.
 
 Status: pre-1.0 · incubating under the [Ludex lab](https://github.com/ludex-lab/ludex).
 All research figures shown are in-lab, per their source labels, pending third-party

@@ -438,13 +438,16 @@ def cmd_serve(a):
     """HTTP 우체통 서버 — git 없는 전달의 수신처. 한쪽(또는 중립 호스트)이 이 한
     줄을 올리면, 상대는 push/pull만으로 봉투를 주고받는다. 서버는 dumb하다:
     봉투를 검증하지 않는다(검증은 수신 hub의 admit). 기본 bind는 127.0.0.1 —
-    외부 노출은 --bind 0.0.0.0을 **직접** 선택해야 한다."""
+    외부 노출은 --bind 0.0.0.0을 **직접** 선택해야 한다. 토큰별 rate limit
+    기본 60/분(hosted 비용 유계) — self-host P2P는 --rate-limit 0으로 꺼도 된다."""
     try:
-        srv = hd.make_server(a.root, a.token_file, bind=a.bind, port=a.port)
+        srv = hd.make_server(a.root, a.token_file, bind=a.bind, port=a.port,
+                             rate_limit_per_minute=a.rate_limit)
     except (ValueError, OSError) as e:
         raise HubCliError(str(e))
     print(json.dumps({"profile": hd.DROP_PROFILE, "root": str(Path(a.root)),
-                      "bind": a.bind, "port": srv.server_address[1]},
+                      "bind": a.bind, "port": srv.server_address[1],
+                      "rate_limit_per_minute": a.rate_limit},
                      ensure_ascii=False), flush=True)
     try:
         srv.serve_forever()
@@ -543,7 +546,10 @@ def main(argv=None) -> int:
         ("serve", cmd_serve, [("--root", {"required": True}),
                               ("--token-file", {"required": True}),
                               ("--bind", {"default": "127.0.0.1"}),
-                              ("--port", {"type": int, "default": 8642})]),
+                              ("--port", {"type": int, "default": 8642}),
+                              ("--rate-limit",
+                               {"type": int,
+                                "default": hd.RATE_LIMIT_PER_MINUTE})]),
         ("push", cmd_push, [("--url", {"required": True}),
                             ("--quad", {"required": True}),
                             ("--token-file", {"required": True})]),

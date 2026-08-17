@@ -25,6 +25,9 @@ transport_root 스왑만으로 무변경 동작한다.
 - `GET  /v0/<channel>/<from-x>?since=NNN` → 200 {"quads":[…], "more"} (n 오름차순,
   페이지 20; envelope가 마지막에 쓰이므로 미완성 quad는 목록에 나오지 않는다)
 - 인증: `Authorization: Bearer <token>` (토큰 파일 한 줄 하나, `#` 주석)
+- 토큰(=멤버)별 rate limit: 초과는 429 + `Retry-After` 초. hosted(gated) 티어의
+  비용 유계 조건 — 인증 실패(401)는 멤버가 아니므로 예산을 먹지 않고, 인증 전
+  플러드 방어는 배치 층(에지/방화벽) 몫이다.
 
 서버는 의도적으로 **단일 스레드**다(요청 직렬화 → 쓰기 경쟁 0). 랩 규모
 저빈도 전달이 대상이고, 상주 부담은 프로세스 하나 — 내리면 그만이다.
@@ -33,9 +36,12 @@ transport_root 스왑만으로 무변경 동작한다.
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
 import json
+import math
 import re
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -46,6 +52,8 @@ ENVELOPE_MAX_BYTES = 65536          # hub_wire CONTENT_MAX_BYTES와 같은 값
 BODY_MAX_BYTES = 1_048_576
 REQUEST_MAX_BYTES = 2 * 1_048_576
 PAGE_SIZE = 20
+RATE_LIMIT_PER_MINUTE = 60          # 토큰별 기본값 — 0이면 끔(self-host P2P용)
+_WINDOW_SECONDS = 60.0
 
 _CHANNEL_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _SENDER_RE = re.compile(r"^from-[a-z0-9][a-z0-9-]{0,63}$")
@@ -70,11 +78,42 @@ def load_tokens(path: str | Path) -> list[str]:
     return toks
 
 
-def _token_ok(tokens: list[str], header: str | None) -> bool:
+def _token_match(tokens: list[str], header: str | None) -> str | None:
+    """일치한 토큰을 돌려준다(없으면 None) — rate limit이 멤버 단위로 키를 잡도록."""
     if not header or not header.startswith("Bearer "):
-        return False
+        return None
     given = header[len("Bearer "):].strip()
-    return any(hmac.compare_digest(given, t) for t in tokens)
+    for t in tokens:
+        if hmac.compare_digest(given, t):
+            return t
+    return None
+
+
+class RateLimiter:
+    """토큰(=멤버)별 고정 창 카운터. per_minute<=0이면 끔.
+
+    단일 스레드 서버 전제의 in-memory 카운터다 — 프로세스 재시작이면 창도
+    리셋된다(비용 유계가 목적이지 정밀 계량이 아니다). 키는 토큰의 sha256
+    접두라 자료구조에 비밀 원문을 한 벌 더 들고 있지 않는다."""
+
+    def __init__(self, per_minute: int, clock=time.monotonic):
+        self.per_minute = per_minute
+        self._clock = clock
+        self._windows: dict[str, tuple[float, int]] = {}
+
+    def check(self, token: str) -> int | None:
+        """허용이면 None(예산 1 소비), 초과면 Retry-After 초(1..60)."""
+        if self.per_minute <= 0:
+            return None
+        key = hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+        now = self._clock()
+        start, count = self._windows.get(key, (now, 0))
+        if now - start >= _WINDOW_SECONDS:
+            start, count = now, 0
+        if count >= self.per_minute:
+            return max(1, math.ceil(_WINDOW_SECONDS - (now - start)))
+        self._windows[key] = (start, count + 1)
+        return None
 
 
 def _quad_files(dirp: Path, n: str) -> dict | None:
@@ -140,19 +179,28 @@ class _DropHandler(BaseHTTPRequestHandler):
     server_version = "organum-hub-drop/0"
     root: Path
     tokens: list[str]
+    limiter: RateLimiter
 
-    def _send(self, status: int, obj: dict):
+    def _send(self, status: int, obj: dict, headers: dict | None = None):
         raw = json.dumps(obj, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(raw)))
+        for k, v in (headers or {}).items():
+            self.send_header(k, v)
         self.end_headers()
         self.wfile.write(raw)
 
     def _gate(self) -> tuple[str, str] | None:
-        """인증 → 경로 순. 실패 시 응답까지 보내고 None."""
-        if not _token_ok(self.tokens, self.headers.get("Authorization")):
+        """인증 → rate limit → 경로 순. 실패 시 응답까지 보내고 None."""
+        token = _token_match(self.tokens, self.headers.get("Authorization"))
+        if token is None:
             self._send(401, {"error": "bearer 토큰 필요"})
+            return None
+        retry = self.limiter.check(token)
+        if retry is not None:
+            self._send(429, {"error": f"rate limit — {retry}초 뒤에"},
+                       headers={"Retry-After": str(retry)})
             return None
         path = self.path.split("?", 1)[0]
         loc = _split_path(path)
@@ -224,10 +272,13 @@ class _DropHandler(BaseHTTPRequestHandler):
 
 
 def make_server(root: str | Path, token_file: str | Path,
-                bind: str = "127.0.0.1", port: int = 8642) -> HTTPServer:
+                bind: str = "127.0.0.1", port: int = 8642,
+                rate_limit_per_minute: int = RATE_LIMIT_PER_MINUTE,
+                clock=time.monotonic) -> HTTPServer:
     tokens = load_tokens(token_file)
     handler = type("Handler", (_DropHandler,),
-                   {"root": Path(root), "tokens": tokens})
+                   {"root": Path(root), "tokens": tokens,
+                    "limiter": RateLimiter(rate_limit_per_minute, clock=clock)})
     return HTTPServer((bind, port), handler)
 
 
