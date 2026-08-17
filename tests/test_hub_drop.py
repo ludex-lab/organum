@@ -231,3 +231,15 @@ def test_rate_limit_초과는_429_Retry_After_401은_예산을_안_먹고_토큰
         assert get("member-b")[0] == 200             # 다른 멤버는 독립 예산
     finally:
         srv.shutdown()
+
+
+def test_클라이언트_timeout_인자_배선(drop, tmp_path):
+    """0.4.2: push/pull이 timeout을 받는다(기본 90 — 콜드스타트 ~1분 실측 반영)."""
+    url, token, root = drop
+    assert hd.CLIENT_TIMEOUT_SECONDS == 90
+    sdir = root / "ch" / "from-a"
+    sdir.mkdir(parents=True)
+    (sdir / "001-sig.txt").write_text("ab" * 64 + "\n")
+    (sdir / "001-envelope.json").write_bytes(b'{"n":1}')
+    got = hd.pull_quads(f"{url}/v0/ch/from-a", token, tmp_path / "in", timeout=5)
+    assert got == ["001"]

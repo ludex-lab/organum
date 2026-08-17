@@ -371,3 +371,195 @@ def test_crashproof가_main_경로에_걸려_있다(capsys, ws):
     cli._crashproof_console()                              # 예외 없이(비콘솔 포함)
     rc, _ = run(capsys, "keygen", "cp949-check")
     assert rc == 0
+
+
+# ═══ signer.introduced — 신규 서명자 사후 도입 (0.4.2) ═══════════════════════
+
+def test_introduce_signer_사후_도입_소급_정식화_무연쇄(capsys, ws):
+    """log가 선 hub에 제3랩 signer를 admitted 이벤트로 도입(C1 우회 아님 —
+    valid_from_seq=도입 좌표+1). ① 도입 전 admit은 거부(미등록) ② 도입 전에
+    서명해 둔 봉투가 도입 뒤 admit으로 정식화(소급 정식화 명문) ③ 도입자 키
+    revoke는 피도입자에 연쇄하지 않는다(도입=사실 기록) ④ was_valid 좌표 의미."""
+    a_pub, b_pub, _ = _setup(capsys, ws)
+    Path("f.txt").write_text("x", encoding="utf-8")
+    rc, r = run(capsys, "attest", "--dir", "hub", "--key", "lab-a.seed",
+                "--signer", "lab:a", "--key-id", "k1", "--epoch", "1",
+                "--file", "f.txt", "--claim", "core:artifact.frozen", "--scope", "s")
+    assert rc == 0 and r["admitted"]                      # seq 1 — log가 섰다
+
+    _, c = run(capsys, "keygen", "lab-c")
+    env_c = {"envelope_schema": he.ENVELOPE_SCHEMA, "event_kind": "message.read",
+             "signer": {"id": "lab:c", "key_id": "k1", "key_epoch": 1},
+             "subject": {"type": "run", "id": "run:intro-1"},
+             "provenance": {"lab": "lab:c", "machine": "m-c01", "platform": "linux",
+                            "adapter": "c-tooling/1.0", "cli_version": None,
+                            "capture": None},
+             "idempotency_key": "c-hello-1", "created_at": "2026-08-17T01:00:00Z",
+             "payload": {"cursor": "c-0"}}
+    Path("c-envelope.json").write_text(json.dumps(env_c, ensure_ascii=False),
+                                       encoding="utf-8")
+    rc, sig = run(capsys, "sign", "--key", "lab-c.seed",
+                  "--envelope", "c-envelope.json")
+    assert rc == 0                              # 도입 **전** 서명(게이트 수준 시절)
+
+    # ① 도입 전 admit은 미등록 키로 거부
+    rc, r0 = run(capsys, "admit", "--dir", "hub", "--envelope", "c-envelope.json",
+                 "--sig", sig["sig"], "--pubkey", sig["pubkey"])
+    assert rc == 1 and not r0["admitted"]
+
+    # 도입 — hub 운영 lab(lab:a = source_domain lab)이 서명한 admitted 이벤트(I1)
+    rc, intro = run(capsys, "introduce-signer", "--dir", "hub", "--key", "lab-a.seed",
+                    "--signer", "lab:a", "--key-id", "k1", "--epoch", "1",
+                    "--new-signer", "lab:c", "--new-key-id", "k1",
+                    "--new-epoch", "1", "--new-pubkey", c["pubkey"])
+    assert rc == 0 and intro["admitted"]
+    n = intro["accepted_seq"]
+
+    # ④ 효력은 n+1부터(C2 관례) — 도입 이벤트 좌표에서 무효, 다음부터 유효
+    rc, w = run(capsys, "was-valid", "--dir", "hub", "--pubkey", c["pubkey"],
+                "--seq", str(n))
+    assert w["valid"] is False
+    rc, w = run(capsys, "was-valid", "--dir", "hub", "--pubkey", c["pubkey"],
+                "--seq", str(n + 1))
+    assert w["valid"] is True
+
+    # ② 소급 정식화 — 같은 봉투(도입 전 서명)가 이제 admit된다(재생 경유 = 지속성)
+    rc, r1 = run(capsys, "admit", "--dir", "hub", "--envelope", "c-envelope.json",
+                 "--sig", sig["sig"], "--pubkey", sig["pubkey"])
+    assert rc == 0 and r1["admitted"]
+
+    # ③ 무연쇄 — 도입자(lab:a) 키를 revoke해도 lab:c는 산다
+    rc, rv = run(capsys, "revoke-key", "--dir", "hub", "--key", "lab-a.seed",
+                 "--signer", "lab:a", "--key-id", "k1", "--epoch", "1",
+                 "--revoke-key-id", "k1", "--revoke-epoch", "1",
+                 "--reason", "무연쇄 검증")
+    assert rc == 0 and rv["admitted"]
+    env_c2 = dict(env_c, idempotency_key="c-hello-2", payload={"cursor": "c-1"})
+    Path("c2.json").write_text(json.dumps(env_c2, ensure_ascii=False),
+                               encoding="utf-8")
+    rc, sig2 = run(capsys, "sign", "--key", "lab-c.seed", "--envelope", "c2.json")
+    rc, r2 = run(capsys, "admit", "--dir", "hub", "--envelope", "c2.json",
+                 "--sig", sig2["sig"], "--pubkey", sig2["pubkey"])
+    assert rc == 0 and r2["admitted"]
+
+
+def test_introduce_signer_음성_4종_자기도입_기존signer_결속pubkey_grammar(capsys, ws):
+    """음성: 자기 도입(rotate 전용)·이미 결속 있는 signer(남의 authority 확장 금지)·
+    이미 결속된 pubkey(조용한 재사용 금지)·lab grammar 밖(payload shape)."""
+    a_pub, b_pub, _ = _setup(capsys, ws)
+    _, x = run(capsys, "keygen", "lab-x")
+    base = ["introduce-signer", "--dir", "hub", "--key", "lab-a.seed",
+            "--signer", "lab:a", "--key-id", "k1", "--epoch", "1"]
+    for tail, why in [
+        (["--new-signer", "lab:a", "--new-key-id", "k9", "--new-epoch", "1",
+          "--new-pubkey", x["pubkey"]], "자기 도입"),
+        (["--new-signer", "lab:b", "--new-key-id", "k9", "--new-epoch", "1",
+          "--new-pubkey", x["pubkey"]], "기존 signer"),
+        (["--new-signer", "lab:y", "--new-key-id", "k1", "--new-epoch", "1",
+          "--new-pubkey", a_pub], "결속 pubkey"),
+        (["--new-signer", "no-prefix", "--new-key-id", "k1", "--new-epoch", "1",
+          "--new-pubkey", x["pubkey"]], "lab grammar"),
+    ]:
+        rc, r = run(capsys, *base, *tail)
+        assert rc == 1 and not r["admitted"], why
+
+
+def test_i1_도입_authority는_hub_운영_lab만_재위임과_선점_불가(capsys, ws):
+    """[Orin I1] ① 등록 peer(lab:b)의 도입 → 거부 + 로그·registry 무전이(선점 실패)
+    ② 거부가 seq를 안 먹었으므로 뒤의 local 도입이 정상 성립(선점 뒤 정상 도입)
+    ③ 정식 도입된 lab:c의 재위임(lab:d 도입) → 거부(권한 자동 상속 없음)
+    ④ replay(새 CLI 호출) 후 동일 상태."""
+    a_pub, b_pub, _ = _setup(capsys, ws)
+    Path("f.txt").write_text("x", encoding="utf-8")
+    rc, r = run(capsys, "attest", "--dir", "hub", "--key", "lab-a.seed",
+                "--signer", "lab:a", "--key-id", "k1", "--epoch", "1",
+                "--file", "f.txt", "--claim", "core:artifact.frozen", "--scope", "s")
+    assert rc == 0 and r["accepted_seq"] == 1
+
+    _, c = run(capsys, "keygen", "lab-c")
+    _, d = run(capsys, "keygen", "lab-d")
+    _, x = run(capsys, "keygen", "lab-x")
+
+    # ① peer lab:b가 lab:c를 제 선택 pubkey로 선점 시도 → 거부
+    rc, r = run(capsys, "introduce-signer", "--dir", "hub", "--key", "lab-b.seed",
+                "--signer", "lab:b", "--key-id", "k1", "--epoch", "1",
+                "--new-signer", "lab:c", "--new-key-id", "k1", "--new-epoch", "1",
+                "--new-pubkey", x["pubkey"])
+    assert rc == 1 and not r["admitted"]
+    assert any("authority" in p for p in r["problems"])
+
+    # ② local(lab:a) 도입이 seq 2 — 거부가 로그를 안 전진시킨 증거 + 선점 무효
+    rc, intro = run(capsys, "introduce-signer", "--dir", "hub", "--key", "lab-a.seed",
+                    "--signer", "lab:a", "--key-id", "k1", "--epoch", "1",
+                    "--new-signer", "lab:c", "--new-key-id", "k1", "--new-epoch", "1",
+                    "--new-pubkey", c["pubkey"])
+    assert rc == 0 and intro["admitted"] and intro["accepted_seq"] == 2
+
+    # ③ 도입된 lab:c의 재위임 시도 → 거부(재귀 membership CA 금지)
+    rc, r = run(capsys, "introduce-signer", "--dir", "hub", "--key", "lab-c.seed",
+                "--signer", "lab:c", "--key-id", "k1", "--epoch", "1",
+                "--new-signer", "lab:d", "--new-key-id", "k1", "--new-epoch", "1",
+                "--new-pubkey", d["pubkey"])
+    assert rc == 1 and not r["admitted"]
+    assert any("authority" in p for p in r["problems"])
+
+    # ④ replay: 새 호출이 재생 경유 — c 유효·d 미등록 유지
+    rc, w = run(capsys, "was-valid", "--dir", "hub", "--pubkey", c["pubkey"],
+                "--seq", str(intro["accepted_seq"] + 1))
+    assert w["valid"] is True
+    rc, w = run(capsys, "was-valid", "--dir", "hub", "--pubkey", d["pubkey"],
+                "--seq", "9")
+    assert w["valid"] is None
+
+
+def test_i1_r3_bare_name_source_domain은_bootstrap_교차확인으로_파생(capsys, ws):
+    """[Ludex r2 반증 교정] 공개 CLI가 허용하는 bare name source_domain("ludex")
+    hub에서 ① 운영 lab(lab:ludex, bootstrap 결속)의 도입이 성립하고 replay가
+    산다(r2에서는 authority=None → 정당 도입 거부 → hub 동결) ② 다른 bootstrap
+    peer(lab:ray)는 여전히 도입 불가 ③ bare name과 일치하는 bootstrap 서명자가
+    없으면 fail-closed 유지."""
+    _, lx = run(capsys, "keygen", "ludex")
+    _, ry = run(capsys, "keygen", "ray")
+    rc, _ = run(capsys, "init", "--dir", "hub", "--source-domain", "ludex")  # bare
+    assert rc == 0
+    for signer, pub in (("lab:ludex", lx["pubkey"]), ("lab:ray", ry["pubkey"])):
+        rc, _ = run(capsys, "register-key", "--dir", "hub", "--signer", signer,
+                    "--key-id", "k1", "--epoch", "1", "--pubkey", pub)
+        assert rc == 0
+    Path("f.txt").write_text("x", encoding="utf-8")
+    rc, r = run(capsys, "attest", "--dir", "hub", "--key", "ludex.seed",
+                "--signer", "lab:ludex", "--key-id", "k1", "--epoch", "1",
+                "--file", "f.txt", "--claim", "core:artifact.frozen", "--scope", "s")
+    assert rc == 0 and r["accepted_seq"] == 1              # log가 섰다
+
+    _, c = run(capsys, "keygen", "lab-c")
+    # ② 다른 bootstrap peer는 authority 아님
+    rc, r = run(capsys, "introduce-signer", "--dir", "hub", "--key", "ray.seed",
+                "--signer", "lab:ray", "--key-id", "k1", "--epoch", "1",
+                "--new-signer", "lab:c", "--new-key-id", "k1", "--new-epoch", "1",
+                "--new-pubkey", c["pubkey"])
+    assert rc == 1 and not r["admitted"]
+    # ① 운영 lab 도입 성립 (Ludex 라이브 seq 6과 같은 모양)
+    rc, intro = run(capsys, "introduce-signer", "--dir", "hub", "--key", "ludex.seed",
+                    "--signer", "lab:ludex", "--key-id", "k1", "--epoch", "1",
+                    "--new-signer", "lab:c", "--new-key-id", "k1", "--new-epoch", "1",
+                    "--new-pubkey", c["pubkey"])
+    assert rc == 0 and intro["admitted"] and intro["accepted_seq"] == 2
+    # replay 생존 — r2에서는 이 호출이 "로그 손상"으로 죽었다
+    rc, w = run(capsys, "was-valid", "--dir", "hub", "--pubkey", c["pubkey"],
+                "--seq", str(intro["accepted_seq"] + 1))
+    assert rc == 0 and w["valid"] is True
+
+    # ③ bare name과 일치하는 bootstrap 서명자가 없으면 fail-closed
+    _, o = run(capsys, "keygen", "lab-other")
+    rc, _ = run(capsys, "init", "--dir", "hub2", "--source-domain", "solo")
+    assert rc == 0
+    rc, _ = run(capsys, "register-key", "--dir", "hub2", "--signer", "lab:other",
+                "--key-id", "k1", "--epoch", "1", "--pubkey", o["pubkey"])
+    assert rc == 0
+    rc, r = run(capsys, "introduce-signer", "--dir", "hub2", "--key", "lab-other.seed",
+                "--signer", "lab:other", "--key-id", "k1", "--epoch", "1",
+                "--new-signer", "lab:c", "--new-key-id", "k1", "--new-epoch", "1",
+                "--new-pubkey", c["pubkey"])
+    assert rc == 1 and not r["admitted"]
+    assert any("authority" in p for p in r["problems"])

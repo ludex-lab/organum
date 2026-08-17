@@ -198,6 +198,13 @@ tunnel or put the drop on a **neutral host**. Three rules for that case:
 - **One honest line**: until a sealed layer lands, a neutral host's operator
   can read envelope bodies. Don't put secrets on a server you don't trust.
 
+Two small properties worth writing down (0.4.2). The server is dumb but it
+**keeps hygiene** — a quad whose shape is off (3–6 digit number, hex128
+signature, size caps) is refused with 400. And the client timeout defaults to
+90 seconds — measured against free-tier cold starts (~1 min), adjustable with
+`--timeout`. If the first request still drops, just send again — re-pushing
+is a dedup, always safe.
+
 ## Riding a Nostr relay (optional) — Buzz-compatible
 
 The wire format is not organum-specific — it is **standard Nostr** (NIP-01

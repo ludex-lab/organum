@@ -54,6 +54,9 @@ REQUEST_MAX_BYTES = 2 * 1_048_576
 PAGE_SIZE = 20
 RATE_LIMIT_PER_MINUTE = 60          # 토큰별 기본값 — 0이면 끔(self-host P2P용)
 _WINDOW_SECONDS = 60.0
+CLIENT_TIMEOUT_SECONDS = 90         # 콜드스타트(~1분, free hosted) 실측이 정한 기본값
+                                    # — Ludex 관찰: 종전 30s 고정이 콜드스타트와 겹쳐
+                                    # 핸드셰이크 EOF로 보였다. 재푸시는 dedup 멱등.
 
 _CHANNEL_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _SENDER_RE = re.compile(r"^from-[a-z0-9][a-z0-9-]{0,63}$")
@@ -284,13 +287,14 @@ def make_server(root: str | Path, token_file: str | Path,
 
 # ── 클라이언트 ──────────────────────────────────────────────────────────────
 
-def _request(url: str, token: str, data: bytes | None = None) -> dict:
+def _request(url: str, token: str, data: bytes | None = None,
+             timeout: int = CLIENT_TIMEOUT_SECONDS) -> dict:
     req = urllib.request.Request(
         url, data=data, method="POST" if data is not None else "GET",
         headers={"Authorization": f"Bearer {token}",
                  **({"Content-Type": "application/json"} if data else {})})
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         try:
@@ -300,7 +304,8 @@ def _request(url: str, token: str, data: bytes | None = None) -> dict:
         raise DropError(e.code, msg or e.reason) from None
 
 
-def push_quad(url: str, token: str, quad_prefix: str | Path) -> dict:
+def push_quad(url: str, token: str, quad_prefix: str | Path,
+              timeout: int = CLIENT_TIMEOUT_SECONDS) -> dict:
     """export가 만든 quad(`<dir>/NNN` 접두)를 POST. 같은 내용 재전송은 dedup 수렴."""
     prefix = Path(quad_prefix)
     n = prefix.name
@@ -318,11 +323,12 @@ def push_quad(url: str, token: str, quad_prefix: str | Path) -> dict:
     if bodies:
         bundle["body_name"] = bodies[0].name[len(n) + 1:]
         bundle["body_b64"] = base64.b64encode(bodies[0].read_bytes()).decode("ascii")
-    return _request(url, token, json.dumps(bundle).encode("utf-8"))
+    return _request(url, token, json.dumps(bundle).encode("utf-8"), timeout=timeout)
 
 
 def pull_quads(url: str, token: str, dest: str | Path,
-               since: str | None = None) -> list[str]:
+               since: str | None = None,
+               timeout: int = CLIENT_TIMEOUT_SECONDS) -> list[str]:
     """새 quad를 받아 로컬 우체통 트리에 내려쓴다. since 생략 시 로컬 최대 NNN부터.
 
     로컬도 append-only 우편함이다 — 이미 있는 파일은 절대 덮어쓰지 않는다."""
@@ -334,7 +340,7 @@ def pull_quads(url: str, token: str, dest: str | Path,
         since = f"{max(have):03d}" if have else "000"
     written: list[str] = []
     while True:
-        page = _request(f"{url}?since={since}", token)
+        page = _request(f"{url}?since={since}", token, timeout=timeout)
         for q in page["quads"]:
             n = q["n"]
             if not _N_RE.match(n):

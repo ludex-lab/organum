@@ -205,8 +205,9 @@ def cmd_register_key(a):
     d, cfg, hub = _load(a.dir)                              # 검증 겸 로드
     if hub.log is not None and hub.log.tree_size > 0:
         raise HubCliError(
-            "admitted 이벤트가 이미 있어 bootstrap 등록 불가 — 새 키는 "
-            "`organum-hub rotate-key`(admitted 이벤트로 lifecycle 전이)를 쓰세요")
+            "admitted 이벤트가 이미 있어 bootstrap 등록 불가 — 기존 signer의 새 키는 "
+            "`organum-hub rotate-key`, 신규 signer 도입은 "
+            "`organum-hub introduce-signer`(둘 다 admitted 이벤트로 lifecycle 전이)")
     # 쓰기 전에 registry 불변식으로 검증(shape·pubkey/tuple 유일성) — 실패 시 무변.
     probe = he.KeyRegistry()
     for k in cfg["keys"]:
@@ -302,6 +303,24 @@ def cmd_rotate_key(a):
     env = _build_envelope(cfg, "key.rotated",
                           {"new_key_id": a.new_key_id, "new_key_epoch": a.new_epoch,
                            "new_pubkey": a.new_pubkey},
+                          signer=a.signer, key_id=a.key_id, epoch=a.epoch,
+                          subject={"type": "machine", "id": "machine:" + cfg["machine_id"]})
+    return _sign_admit(d, cfg, hub, env, seed)
+
+
+def cmd_introduce_signer(a):
+    """신규 서명자 도입(0.4.2) — admitted 이벤트로 lifecycle 전이. **hub 운영
+    lab(source_domain의 lab)만** 서명할 수 있다(Orin I1: 등록 peer 불가·권한 자동
+    상속 없음). 결속의 valid_from_seq는 이벤트 좌표의 다음(n+1)이다 — bootstrap
+    register-key(valid_from_seq=0 소급)와 달리 log 우회가 없어 C1과 같은 불변식을
+    지킨다. 도입 전 게이트 수준으로 검증한 봉투는 도입 뒤 재-admit으로 정식화 가능.
+    주의(소비자): 도입 결속은 hub.json에 안 쓰인다 — 로그 재생 투영으로 산다.
+    유효 서명자 집합 = bootstrap keys + 로그 투영(진실 표면은 `list`)."""
+    seed = _read_seed(a.key)
+    d, cfg, hub = _load(a.dir)
+    env = _build_envelope(cfg, "signer.introduced",
+                          {"signer_id": a.new_signer, "key_id": a.new_key_id,
+                           "key_epoch": a.new_epoch, "pubkey": a.new_pubkey},
                           signer=a.signer, key_id=a.key_id, epoch=a.epoch,
                           subject={"type": "machine", "id": "machine:" + cfg["machine_id"]})
     return _sign_admit(d, cfg, hub, env, seed)
@@ -459,7 +478,7 @@ def cmd_serve(a):
 def cmd_push(a):
     token = hd.load_tokens(a.token_file)[0]
     try:
-        r = hd.push_quad(a.url, token, a.quad)
+        r = hd.push_quad(a.url, token, a.quad, timeout=a.timeout)
     except (ValueError, hd.DropError) as e:
         raise HubCliError(str(e))
     print(json.dumps(r, ensure_ascii=False))
@@ -469,7 +488,7 @@ def cmd_push(a):
 def cmd_pull(a):
     token = hd.load_tokens(a.token_file)[0]
     try:
-        ns = hd.pull_quads(a.url, token, a.dest, since=a.since)
+        ns = hd.pull_quads(a.url, token, a.dest, since=a.since, timeout=a.timeout)
     except (ValueError, hd.DropError) as e:
         raise HubCliError(str(e))
     print(json.dumps({"pulled": ns, "dest": str(Path(a.dest))}, ensure_ascii=False))
@@ -552,11 +571,17 @@ def main(argv=None) -> int:
                                 "default": hd.RATE_LIMIT_PER_MINUTE})]),
         ("push", cmd_push, [("--url", {"required": True}),
                             ("--quad", {"required": True}),
-                            ("--token-file", {"required": True})]),
+                            ("--token-file", {"required": True}),
+                            ("--timeout",
+                             {"type": int,
+                              "default": hd.CLIENT_TIMEOUT_SECONDS})]),
         ("pull", cmd_pull, [("--url", {"required": True}),
                             ("--dest", {"required": True}),
                             ("--token-file", {"required": True}),
-                            ("--since", {"default": None})]),
+                            ("--since", {"default": None}),
+                            ("--timeout",
+                             {"type": int,
+                              "default": hd.CLIENT_TIMEOUT_SECONDS})]),
         ("rotate-key", cmd_rotate_key, [("--dir", {"required": True}),
                                         ("--key", {"required": True}),
                                         ("--signer", {"required": True}),
@@ -565,6 +590,16 @@ def main(argv=None) -> int:
                                         ("--new-key-id", {"required": True}),
                                         ("--new-epoch", {"type": int, "required": True}),
                                         ("--new-pubkey", {"required": True})]),
+        ("introduce-signer", cmd_introduce_signer,
+         [("--dir", {"required": True}),
+          ("--key", {"required": True}),
+          ("--signer", {"required": True}),
+          ("--key-id", {"required": True}),
+          ("--epoch", {"type": int, "required": True}),
+          ("--new-signer", {"required": True}),
+          ("--new-key-id", {"required": True}),
+          ("--new-epoch", {"type": int, "required": True}),
+          ("--new-pubkey", {"required": True})]),
         ("revoke-key", cmd_revoke_key, [("--dir", {"required": True}),
                                         ("--key", {"required": True}),
                                         ("--signer", {"required": True}),

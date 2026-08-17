@@ -124,7 +124,8 @@ def event_id_of(raw: bytes) -> str:
 
 EVIDENCE_KINDS = ("artifact.attested", "toolchain.observed", "canary.result",
                   "provider.route.observed", "hub.anchor",
-                  "key.rotated", "key.revoked", "machine.rekeyed", "machine.superseded",
+                  "key.rotated", "key.revoked", "signer.introduced",
+                  "machine.rekeyed", "machine.superseded",
                   "run_set.launch_authorized", "run_set.completed")
 COORDINATION_KINDS = ("message.posted", "message.read", "delivery.semantic_ack")
 ALL_KINDS = EVIDENCE_KINDS + COORDINATION_KINDS
@@ -486,6 +487,15 @@ _PAYLOAD_VALIDATORS = {
                    and type(p["key_epoch"]) is int and p["key_epoch"] >= 1
                    and _is_str(p["reason"]))
             else ["key.revoked 필드 shape 위반"])),
+    "signer.introduced": lambda p: (
+        _bad_keys(p, {"signer_id", "key_id", "key_epoch", "pubkey"},
+                  "signer.introduced payload")
+        or ([] if (_is_str(p["signer_id"]) and _LAB_ID.fullmatch(p["signer_id"])
+                   and _is_str(p["key_id"]) and _KEY_ID.fullmatch(p["key_id"])
+                   and type(p["key_epoch"]) is int and p["key_epoch"] >= 1
+                   and _is_str(p["pubkey"]) and _HEX64.fullmatch(p["pubkey"]))
+            else ["signer.introduced 필드 shape 위반(lab grammar·key_id·epoch≥1·"
+                  "pubkey hex64)"])),
     "machine.rekeyed": lambda p: _bad_keys(
         p, {"machine_id", "new_key_id"}, "machine.rekeyed payload"),
     "machine.superseded": lambda p: _bad_keys(
@@ -859,6 +869,8 @@ class HubIndex:
             return base + self._policy_key_rotated(env), True, None
         if kind == "key.revoked":
             return base + self._policy_key_revoked(env), True, None
+        if kind == "signer.introduced":
+            return base + self._policy_signer_introduced(env), True, None
         if kind == "canary.result":
             return base + self._policy_canary(env), True, None
         if kind == "run_set.launch_authorized":
@@ -1029,6 +1041,59 @@ class HubIndex:
             return ["이미 revoked된 키"]
         return []
 
+    def _introducer_authority(self) -> str | None:
+        """도입 authority = **hub 운영 lab** — source_domain에서 구조적으로 파생
+        (Orin I1 폐쇄 + Ludex r2 반증 교정). 파생 규칙(r3):
+        ① 첫 조각이 `lab:x` 문법이면 그것 — 자기 선언, bootstrap pin은
+          source_domain 자체가 진다.
+        ② 첫 조각 n이 문법 밖(**bare name** — 공개 CLI init이 허용하는 표면)이면
+          `lab:n`이 **bootstrap 결속**(valid_from_seq=0, init 시점 C1-guarded
+          hub.json pin)으로 존재할 때만 그것으로 파생. bare name은 자기 선언이
+          아니므로 registry 교차 확인을 요구하고, 도입 결속(valid_from_seq>0)은
+          자격이 없어 authority가 로그 순서에 좌우되지 않는다(결정적).
+        어느 쪽도 아니면 None = 아무도 도입 못 함(fail-closed — 라이브러리 기본
+        "organum-hub/local"이 이 경우). 설정 필드가 아니라 파생이라 silent
+        post-log mutation 표면이 없고(hub.json 손편집 마이그레이션은 배제가
+        규율이다), direct admit·wire·CLI·replay가 전부 이 한 술어를 지난다.
+        위임/allowlist 확장은 명시적 다음 정책 슬롯 — "registry에 있으면
+        누구나"는 금지."""
+        head = self._source_domain.split("/", 1)[0]
+        if _LAB_ID.fullmatch(head):
+            return head
+        cand = f"lab:{head}"
+        if _LAB_ID.fullmatch(cand) and any(
+                b["valid_from_seq"] == 0 for b in self.keys.bindings_of(cand)):
+            return cand
+        return None
+
+    def _policy_signer_introduced(self, env) -> list:
+        """신규 서명자 도입(0.4.2 — Ludex 실사용이 밟은 구멍: log가 선 hub에
+        제3자 signer를 들일 경로 부재). 규율 넷:
+        ① **도입 = 로컬 membership 결정**(Orin I1 문장) — 서명자 admission
+          eligibility를 부여한다. 개별 claim의 진실·역할 권위는 해당 kind/claim
+          정책이 별도로 정한다(개방은 프로토콜에, 큐레이션은 정책에).
+        ② **도입 authority는 hub 운영 lab만**(I1) — 등록 peer는 도입 못 하고,
+          도입된 signer도 권한을 자동 상속하지 않는다(재귀 membership CA 금지·
+          signer ID 선점 금지).
+        ③ 도입 대상은 **결속이 전혀 없는 signer만** — 기존 signer의 키 추가는 그
+          signer 자신의 rotate-key 전용(타인이 남의 authority를 늘릴 수 없다).
+        ④ 도입자 revoke의 **연쇄는 프리미티브가 아니다** — 도입은 사실 기록이지
+          살아있는 의존이 아니고, 연쇄 여부는 정책 층 결정으로 남긴다."""
+        p = env["payload"]
+        problems = []
+        auth = self._introducer_authority()
+        if auth is None or env["signer"]["id"] != auth:
+            problems.append(f"도입 authority 없음 — introducer는 hub 운영 lab"
+                            f"({auth})만, 등록 peer 불가(I1 fail-closed)")
+        if p["signer_id"] == env["signer"]["id"]:
+            problems.append("자기 도입 금지 — 자기 키는 rotate-key로")
+        elif self.keys.bindings_of(p["signer_id"]):
+            problems.append("이미 결속 있는 signer — 신규 도입 아님"
+                            "(기존 signer 키는 rotate-key로)")
+        if self.keys.lookup(p["pubkey"]) is not None:
+            problems.append("pubkey가 이미 결속됨(조용한 재사용 금지)")
+        return problems
+
     def _apply_key_lifecycle(self, env: dict, accepted_seq: int) -> None:
         """admitted lifecycle 이벤트만 registry를 전이시킨다.
 
@@ -1047,6 +1112,13 @@ class HubIndex:
             for b in self.keys.bindings_of(env["signer"]["id"]):
                 if (b["key_id"], b["key_epoch"]) == (p["key_id"], p["key_epoch"]):
                     self.keys.revoke(b["pubkey"], at_seq=accepted_seq + 1)
+        elif kind == "signer.introduced":
+            # bootstrap(valid_from_seq=0)과 달리 소급이 없다 — C1이 지키는 것과
+            # 같은 불변식. 도입 전 게이트 수준으로 검증해 둔 봉투는 도입 뒤
+            # 재-admit으로 정식화 가능하다(admit 좌표가 도입 뒤면 위반 아님).
+            self.keys.register(p["pubkey"], signer_id=p["signer_id"],
+                               key_id=p["key_id"], key_epoch=p["key_epoch"],
+                               valid_from_seq=accepted_seq + 1)
 
     def register_canary_rule(self, rule: dict) -> str:
         sha = canonical_sha(rule)
