@@ -581,7 +581,98 @@ class OpenCodeAdapter(Adapter):
                      last_ts=_ms_to_iso(d.get("time_updated")))
 
 
-ADAPTERS: list = [ClaudeAdapter(), CodexAdapter(), AgyAdapter(), GrokAdapter(), OpenCodeAdapter()]
+class CursorAdapter(Adapter):
+    """Cursor CLI(cursor-agent) — `~/.cursor/chats/<md5(cwd)>/<session-id>/`
+    (meta.json: cwd·createdAtMs·updatedAtMs / store.db: content-addressed blobs) +
+    `~/.cursor/projects/<mangled>/agent-transcripts/<sid>/<sid>.jsonl`(대화 JSONL).
+
+    발견은 chats 쪽이 결정적이다: 그룹 dir 이름 = **md5(cwd)** (실물 2026.08.11로
+    검증). projects/의 경로 맹글링은 절삭+해시 변형이 있어 신뢰하지 않고, transcript는
+    sid로 glob 한다. **토큰(in/out/cache)은 디스크에 없다** — headless(-p) 표준출력
+    JSON에만 오고 기록에는 남지 않으므로 None(미측정, '—')으로 정직하게. 컨텍스트
+    구성 명세(store.db root blob f5: system_prompt/tools/… 토큰 분해)는 존재하지만
+    in/out/cache와 의미론이 달라 싣지 않는다. 모델명은 store.db system-prompt blob의
+    "powered by X" 문구에서 취한다(그 외 원천 부재)."""
+    name = "cursor"
+
+    def __init__(self, root: Path | None = None):
+        self.root = root or (HOME / ".cursor")
+
+    def available(self) -> bool:
+        return (self.root / "chats").is_dir()
+
+    def discover(self, cwd, window_min: float = 30.0) -> list:
+        import hashlib
+        grp = self.root / "chats" / hashlib.md5(str(Path(cwd)).encode("utf-8")).hexdigest()
+        if not grp.is_dir():
+            return []
+        cutoff = (time.time() - window_min * 60) * 1000
+        refs = []
+        for sess in grp.iterdir():
+            try:
+                meta = json.loads((sess / "meta.json").read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if meta.get("cwd") != str(Path(cwd)):      # md5 충돌·이동 방어(교차 확인)
+                continue
+            if (meta.get("updatedAtMs") or 0) < cutoff:
+                continue
+            refs.append(sess)
+        return refs
+
+    def read(self, ref, deep: bool = False) -> dict | None:
+        import re
+        sess = Path(ref)
+        try:
+            meta = json.loads((sess / "meta.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        sid = sess.name
+        # 모델: store.db의 system-prompt blob 문구가 유일한 온디스크 원천
+        model = None
+        try:
+            db = sqlite3.connect(f"file:{sess / 'store.db'}?mode=ro", uri=True)
+            for (data,) in db.execute("SELECT data FROM blobs"):
+                if data[:1] != b"{" or b'"system"' not in data[:60]:
+                    continue
+                try:
+                    j = json.loads(data)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    continue
+                if j.get("role") != "system":
+                    continue
+                # 버전 소수점("GLM 5.2") 보존: 문장끝(마침표+공백/줄끝)까지 비탐욕
+                m = re.search(r"powered by (.+?)\.(?:\s|$)", j.get("content") or "")
+                if m:
+                    model = m.group(1).strip()
+                break
+            db.close()
+        except sqlite3.Error:
+            pass
+        # tools: transcript JSONL(projects/*/agent-transcripts/<sid>/)의 tool_use 블록
+        tools: Counter = Counter()
+        for tr in (self.root / "projects").glob(f"*/agent-transcripts/{sid}/{sid}.jsonl"):
+            try:
+                with open(tr, encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        try:
+                            r = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        for c in ((r.get("message") or {}).get("content") or []):
+                            if isinstance(c, dict) and c.get("type") == "tool_use":
+                                tools[c.get("name") or "?"] += 1
+            except OSError:
+                continue
+            break
+        return _cell("cursor", sid, path=str(sess), model=model,
+                     tools=dict(tools),
+                     first_ts=_ms_to_iso(meta.get("createdAtMs")),
+                     last_ts=_ms_to_iso(meta.get("updatedAtMs")))
+
+
+ADAPTERS: list = [ClaudeAdapter(), CodexAdapter(), AgyAdapter(), GrokAdapter(),
+                  OpenCodeAdapter(), CursorAdapter()]
 
 
 def snapshot(cwd, window_min: float = 30.0, adapters: list | None = None,

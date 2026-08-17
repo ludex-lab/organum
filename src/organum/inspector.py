@@ -1,7 +1,7 @@
 """organum-inspector — 사후 계측 CLI (organum 제품군의 read-only 슬라이스).
 
-이미 끝난 작업도 소급해서 잰다: 임의 프로젝트 폴더를 가리키면 5벤더(Claude Code·
-Codex·agy/Gemini·Grok·OpenCode) 세션 기록을 발견·전량 파싱해 소요시간·토큰·툴·
+이미 끝난 작업도 소급해서 잰다: 임의 프로젝트 폴더를 가리키면 6벤더(Claude Code·
+Codex·agy/Gemini·Grok·OpenCode·Cursor) 세션 기록을 발견·전량 파싱해 소요시간·토큰·툴·
 파일을 표로 낸다. "같은 과제를 두 에이전트에게 시켰는데 누가 얼마나 쓰고 얼마나
 걸렸나"가 대표 질문. `organum init` 불요 — 대상 폴더에 아무것도 쓰지 않는다.
 

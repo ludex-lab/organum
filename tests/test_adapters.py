@@ -513,3 +513,80 @@ class TestClaudeAdapterSubagents(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCursorAdapter(unittest.TestCase):
+    """Cursor CLI (cursor-agent 2026.08.11 실물 구조 기반 fixture) — chats/<md5(cwd)>
+    발견·meta ts·store.db 모델·transcript tool_use·토큰 None(원천 부재) 정직성."""
+
+    CWD = "/want/proj"
+
+    def _tree(self, root: Path, cwd: str | None = None, updated_ms: int | None = None):
+        import hashlib
+        cwd = cwd or self.CWD
+        sid = "aaaa1111-2222-3333-4444-555566667777"
+        now_ms = int(time.time() * 1000)
+        sess = root / "chats" / hashlib.md5(cwd.encode()).hexdigest() / sid
+        sess.mkdir(parents=True)
+        (sess / "meta.json").write_text(json.dumps({
+            "schemaVersion": 1, "createdAtMs": now_ms - 60000,
+            "updatedAtMs": updated_ms if updated_ms is not None else now_ms,
+            "cwd": cwd, "hasConversation": True}), encoding="utf-8")
+        db = sqlite3.connect(sess / "store.db")
+        db.execute("CREATE TABLE blobs (id TEXT, data BLOB)")
+        db.execute("INSERT INTO blobs VALUES (?, ?)", ("s1", json.dumps(
+            {"role": "system",
+             "content": "You are an AI coding assistant, powered by GLM 5.2.\n\nYou are..."}
+        ).encode()))
+        db.commit(); db.close()
+        tr = root / "projects" / "want-proj" / "agent-transcripts" / sid
+        tr.mkdir(parents=True)
+        lines = [
+            {"role": "user", "message": {"content": [{"type": "text", "text": "do it"}]}},
+            {"role": "assistant", "message": {"content": [
+                {"type": "text", "text": "ok"},
+                {"type": "tool_use", "name": "Shell", "input": {"command": "ls"}},
+                {"type": "tool_use", "name": "Read", "input": {"path": "a.txt"}}]}},
+            {"type": "turn_ended", "status": "success"},
+        ]
+        (tr / f"{sid}.jsonl").write_text(
+            "\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
+        return sid
+
+    def test_discover_and_read(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            sid = self._tree(root)
+            ad = adapters.CursorAdapter(root=root)
+            refs = ad.discover(self.CWD, window_min=30)
+            self.assertEqual(len(refs), 1)
+            c = ad.read(refs[0])
+            self.assertEqual(c["vendor"], "cursor")
+            self.assertEqual(c["session_id"], sid)
+            self.assertEqual(c["model"], "GLM 5.2")            # 소수점 버전 보존
+            self.assertEqual(c["tools"], {"Shell": 1, "Read": 1})
+            self.assertIsNotNone(c["first_ts"])
+            self.assertIsNotNone(c["last_ts"])
+            # 토큰은 디스크 원천 부재 — 0이 아니라 None(미측정 '—')이어야 한다
+            self.assertIsNone(c["in_tok"])
+            self.assertIsNone(c["out_tok"])
+            self.assertIsNone(c["cache"])
+
+    def test_discover_cwd_cross_check_and_window(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            # meta.cwd가 다른 세션(md5 dir만 우연 일치 시나리오)은 걸러진다
+            import hashlib
+            sid = self._tree(root)
+            fake = root / "chats" / hashlib.md5(self.CWD.encode()).hexdigest() / "bbbb"
+            fake.mkdir()
+            (fake / "meta.json").write_text(json.dumps(
+                {"cwd": "/other", "updatedAtMs": int(time.time() * 1000)}), encoding="utf-8")
+            ad = adapters.CursorAdapter(root=root)
+            self.assertEqual(len(ad.discover(self.CWD, window_min=30)), 1)
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._tree(root, updated_ms=int(time.time() * 1000) - 3 * 3600 * 1000)
+            ad = adapters.CursorAdapter(root=root)
+            self.assertEqual(ad.discover(self.CWD, window_min=30), [])   # 창 밖
+            self.assertEqual(len(ad.discover(self.CWD, window_min=600)), 1)

@@ -36,7 +36,8 @@ organum-inspector .
 자기 홈 디렉터리에 세션 기록을 남기고, inspector는 그걸 읽기만 해요. `init`도
 필요 없고, 지난주에 끝낸 작업에도 그대로 통합니다 — 그게 "사후 계측"이에요.
 
-Claude Code만 되는 것도 아니에요 — Codex, Gemini(Antigravity), Grok, OpenCode
+Claude Code만 되는 것도 아니에요 — Codex, Gemini(Antigravity), Grok, OpenCode,
+Cursor CLI(0.4.3부터)
 세션이 같은 표에 같은 줄로 정규화돼요.
 
 토큰 자리에 숫자 대신 `—`가 보이면 그건 0이 아니라 "그 벤더가 디스크에 안

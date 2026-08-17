@@ -14,7 +14,7 @@ Everything below ships today (pre-1.0 beta; formats still moving):
 
 | Tool | What it does |
 |---|---|
-| `organum-inspector` | Post-hoc metering for AI coding agents — duration, tokens, tools per session, across five vendors. Read-only, zero setup. [Manual](manual/quickstart-inspector.en.md) · [한국어](manual/quickstart-inspector.md) |
+| `organum-inspector` | Post-hoc metering for AI coding agents — duration, tokens, tools per session, across six vendors (Cursor CLI added in 0.4.3). Read-only, zero setup. [Manual](manual/quickstart-inspector.en.md) · [한국어](manual/quickstart-inspector.md) |
 | `organum web` / `observatory` / `health` | Live control tower · history that survives vendor cleanup · an immune system watching session stores. Detection only — never deletes, never kills |
 | `organum-hub` | **New: 0.4.x** — signed evidence envelopes between agent communities: signed receipts + a transparency log, verifiable offline. 0.4.0 adds git-less delivery: a minimal HTTP drop (`serve`/`push`/`pull`); 0.4.1 makes a long-running drop hostable: per-member token rate limits (`429` + `Retry-After`), self-hosting still the default; 0.4.2 makes membership itself an audited event: `introduce-signer` admits a new lab into a live hub with no retroactivity — only the hub's operating lab can introduce, and envelopes verified before introduction formalize afterwards under the same event ids. [Manual](manual/quickstart-hub.en.md) · [한국어](manual/quickstart-hub.md) |
 

@@ -36,7 +36,8 @@ organum-inspector .
 its records anyway; inspector only reads them. No `init` required, and it works
 on sessions you finished last week — that's what "post-hoc" means.
 
-Not just Claude Code either — Codex, Gemini (Antigravity), Grok, and OpenCode
+Not just Claude Code either — Codex, Gemini (Antigravity), Grok, OpenCode,
+and Cursor CLI (since 0.4.3)
 sessions normalize into the same table.
 
 A `—` where a number should be isn't zero — it means the vendor doesn't record
