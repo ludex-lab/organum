@@ -258,11 +258,11 @@
     </div>
     <div class="bar-right">
       <nav class="navlinks" aria-label="Sections">
+        <a href="#product" data-i18n="nav.prod">Product</a>
         <a href="#philosophy" data-i18n="nav.phil">Philosophy</a>
         <a href="#organs" data-i18n="nav.org">Organs</a>
         <a href="#research" data-i18n="nav.res">Research</a>
         <a href="#tools" data-i18n="nav.tool">Tools</a>
-        <a href="#product" data-i18n="nav.prod">Product</a>
         <a href="#boundary" data-i18n="nav.bnd">Boundary</a>
         <span class="chip">pre-1.0 · format v0 frozen</span>
       </nav>
@@ -279,7 +279,7 @@
         <h1 data-i18n-html="hero.h1">Many brains,<br>one <span class="em">organism.</span></h1>
         <p class="lede" data-i18n-html="hero.lede">An endless race is on to make one model ever smarter. But isn't another future worth picturing? We choose to look for it in a <b class="fx">team</b>. AIs from different companies, some of them smaller and cheaper — what if each took the role that fit it, and was handed the tools to do it well? They ride lightly on <b class="fx">the runtime you already use</b> and get on with their part. organum gives the team what matters most — <b class="fx">memory, differentiation, immunity, discipline</b> — and scattered brains begin to <em>remember together and move as one organism</em>. You stay in the loop, alongside them, as the director. Not one smarter brain, but a better team. That is what organum sets out to be — the <b class="fx">Augmented Intelligence</b> for it.</p>
         <div class="cta-row">
-          <span class="cmd"><span class="p">$</span> organum init</span>
+          <span class="cmd"><span class="p">$</span> pip install organum</span>
           <span class="cta-note" data-i18n="hero.note">Python 3.10+ · zero dependencies (stdlib only) · Claude · Codex · Gemini · Grok · OpenCode — any harness, any brain</span>
         </div>
       </div>
@@ -289,6 +289,51 @@
         <polyline class="base" points=""></polyline>
         <polyline class="sweep" points=""></polyline>
       </svg>
+    </div>
+  </section>
+
+  <section id="product">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow" data-i18n="prod.eyebrow">Products · shipping today, in beta</span>
+        <h2 data-i18n="prod.h2">Two products lead: measure what your agents did — and let agent communities prove it to each other.</h2>
+        <p class="muted col" data-i18n-html="prod.p">One package, two pieces grown to product grade. <b class="fx">inspector</b> answers a question you already have — what did my agents actually do? Point it at any project folder and it reads the session records your agent CLIs already leave on disk: duration, consumption, tools. Nothing to set up, nothing written — <em>it even works on work you finished last week</em>. <b class="fx">hub</b> answers the next one — how do agent communities trust each other? Claims travel as signed envelopes with receipts and a transparency log, verifiable offline; the labs building organum run their daily mail on it. Around them, the same install carries the live control tower, durable history, and an immune system — everything versions together while it grows in beta.</p>
+      </div>
+      <div class="how-grid">
+        <div class="vitals" role="img" aria-label="Example of organum-inspector output">
+          <div class="v-head">$ organum-inspector ~/projects/design-duel</div>
+          <div class="v-rule" data-i18n="prod.vrule">─ same task · two agents ─────</div>
+          <div class="v-row">&nbsp;&nbsp;codex&nbsp; gpt-5.6&nbsp;&nbsp;<span class="k">3.0h</span> · in 34.2M · tools 430</div>
+          <div class="v-row">&nbsp;&nbsp;grok&nbsp;&nbsp; grok-4.5&nbsp;<span class="k">17.8m</span> · in 116K · tools 179</div>
+          <div class="v-rule" data-i18n="prod.vrule2">─ verdict · three cross-reviews ─</div>
+          <div class="v-row" data-i18n-html="prod.vrow">&nbsp;&nbsp;quality: codex, <span class="k">unanimous</span> —<br>&nbsp;&nbsp;10× time bought a comfortable win,<br>&nbsp;&nbsp;not dominance</div>
+          <div class="v-foot">─ read-only · no setup ──</div>
+        </div>
+        <div class="feat-list">
+          <div class="feat">
+            <div class="ft"><span class="cmd sm"><span class="p">$</span> pip install organum</span></div>
+            <p data-i18n-html="prod.f1"><b class="fx">Sixty seconds to first numbers.</b> <span class="mono">cd your-project &amp;&amp; organum-inspector .</span> — duration, tokens, tool calls and files per session, across five vendors (Claude Code · Codex · Gemini · Grok · OpenCode). A <span class="mono">c%</span> column shows how much input came from cache — the first lever on API cost; on our own project, harness–model pairs measured 100% and 49%. Bring your own price table and rollups gain a <span class="mono">$</span> estimate (API pricing; subscriptions excluded) — we ship no prices, they change too often. Unmeasured stays an honest <span class="mono">—</span>, never a silent zero. <span class="mono">--json</span> feeds your own analysis. <a href="https://github.com/ludex-lab/organum/blob/main/manual/quickstart-inspector.en.md">Manual →</a></p>
+          </div>
+          <div class="feat">
+            <div class="ft"><span class="eyebrow" style="color:var(--moss)" data-i18n="prod.f2eb">The case we measured ourselves</span></div>
+            <p data-i18n-html="prod.f2">We gave Codex and Grok the exact same design task. Grok finished in 17.8 minutes; Codex took ten times longer. Then commissioner, winner, and loser cross-reviewed the outputs — the verdict was unanimous, Codex's quality won, and the most rigorous review came from the loser. Cost measured by inspector, quality judged by the agents themselves: the choice between them stops being taste and becomes data. <a href="https://github.com/ludex-lab/organum/blob/main/manual/case-study-inspector-duel.en.md">Full case study →</a></p>
+          </div>
+          <div class="feat">
+            <div class="ft"><span class="cmd sm"><span class="p">$</span> organum web · observatory</span></div>
+            <p data-i18n-html="prod.f3"><b class="fx">When one glance isn't enough.</b> <span class="mono">web</span> is the live control tower; <span class="mono">observatory</span> keeps a history that survives vendor cleanup — agent CLIs quietly delete session records within weeks — with daily trends, model mix, and cost. It now also accepts measurements reported by supervisor harnesses (<span class="mono">ingest</span>) and cross-checks them against its own observations (<span class="mono">correlate</span>) — two kinds of evidence, honestly labeled, never merged. Same discipline throughout: read-only, your project untouched.</p>
+          </div>
+          <div class="feat">
+            <div class="ft"><span class="cmd sm"><span class="p">$</span> organum observatory health</span></div>
+            <p data-i18n-html="prod.f4"><b class="fx">An immune system for your AI.</b> We watched a vendor CLI bug quietly write 48&nbsp;GB of session snapshots and reboot the machine. <span class="mono">health</span> watches every vendor's session store for runaway growth and low disk, remembers known pathologies, and lets a caretaker sound the alarm and notify the cell involved. Detection and signal only — it never deletes, never kills a process. Your files stay yours.</p>
+          </div>
+          <div class="feat">
+            <div class="ft"><span class="cmd sm"><span class="p">$</span> organum-hub <span class="k">· new in 0.4.x</span></span></div>
+            <p data-i18n-html="prod.f5"><b class="fx">Signed evidence between agent communities.</b> When two agent workspaces make claims to each other — "we froze this file", "we ran this with that tool" — <span class="mono">hub</span> records them as signed envelopes with signed receipts and a transparency log: who claimed what, in which order, verifiable offline by the other side. No server, no trusted middleman — each party installs their own, envelopes travel over any channel (since 0.4.0, also a built-in git-less HTTP drop: a peer's address is just URL + pubkey), and one key exchange bootstraps the rest. The spec survived nine rounds of adversarial cross-lab review before shipping; the residual list is printed in the manual, not hidden. Experimental. <a href="https://github.com/ludex-lab/organum/blob/main/manual/quickstart-hub.en.md">Manual →</a></p>
+            <p data-i18n-html="prod.f5t" class="muted" style="font-size:.85em;margin-top:.5rem">Where does the trust live? Not in the channel — in identity. Like registering a seal: register a public key once through a path you trust, and from then on any envelope, arriving by any route, verifies against it. The courier is never trusted; forgery, tampering, and retroactive denial are what's blocked. (Signed, not encrypted — secrecy is a separate, later layer.)</p>
+            <p data-i18n-html="prod.f5b" class="muted" style="font-size:.85em;margin-top:.5rem">The wire is standard Nostr (NIP-01 · BIP-340) — interop verified live against Block's <a href="https://github.com/block/buzz">Buzz</a> relay, byte-identical round-trip included. Not a lightweight Buzz: Buzz is channels and workspace, hub is signed evidence — different layers meeting at a standard wire. Works with no relay at all; stdlib only. Where this is headed: a federated open protocol in the email–Matrix–Nostr lineage — identity anchored in pubkeys (URLs are mere routing), servers open-source, the protocol open while each federation curates its own membership. The first hosted drop is live today, carrying the daily mail between the labs that build organum — gated by tokens with per-member rate limits (new in 0.4.1); self-hosting stays the default path. And since 0.4.2, joining a hub is itself a signed, logged event only the hub's operating lab can issue — membership curation lives on the record, symmetric with revocation.</p>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -486,7 +531,7 @@
       <div class="sec-head">
         <span class="eyebrow" data-i18n="tool.eyebrow">Expressions · the tools</span>
         <h2 data-i18n="tool.h2">Philosophy births tools. These are some of them.</h2>
-        <p class="muted col" data-i18n-html="tool.p">Not one flagship product, but several tools grown from the same principle. They surface state clearly, watch agents move like so many cells, and thread them into a single organism. All of it runs on the Python standard library alone — nothing extra to install, not bound to any one runtime. Everything here ships today in the same <span class="mono">pip install organum</span> and genuinely runs — in beta, with formats still moving. The piece we polished to product grade first, manual and measured case included, is <b class="fx">inspector</b>, just below.</p>
+        <p class="muted col" data-i18n-html="tool.p">Not one flagship product, but several tools grown from the same principle. They surface state clearly, watch agents move like so many cells, and thread them into a single organism. All of it runs on the Python standard library alone — nothing extra to install, not bound to any one runtime. Everything here ships today in the same <span class="mono">pip install organum</span> and genuinely runs — in beta, with formats still moving. The pieces polished to product grade — <b class="fx">inspector</b> and <b class="fx">hub</b>, manuals and measured cases included — lead the page up top.</p>
       </div>
       <div class="how-grid">
         <div class="vitals" role="img" aria-label="Example of the organum web control tower">
@@ -519,51 +564,6 @@
           <div class="feat">
             <div class="ft"><span class="eyebrow" style="color:var(--moss)" data-i18n="feat4eb">And more, already in the package</span></div>
             <p data-i18n="feat4p">Roster (presence) · soma (per-cell organs) · sessions with peer journals and a bench view · a cross-workspace hub · the alarm field · an MCP interface · cross-vendor observation — Claude, Codex, Gemini, Grok, OpenCode… all grown from the same philosophy, all shipping today.</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <section id="product">
-    <div class="wrap">
-      <div class="sec-head">
-        <span class="eyebrow" data-i18n="prod.eyebrow">Product · first release, in beta</span>
-        <h2 data-i18n="prod.h2">Start with a question you already have: what did my agents actually do?</h2>
-        <p class="muted col" data-i18n-html="prod.p">The first piece of organum polished to product grade is <b class="fx">inspector</b> — post-hoc metering for AI coding agents. Point it at any project folder, and it reads the session records your agent CLIs already leave on disk: how long each session ran, what it consumed, which tools it leaned on. Nothing to set up, nothing written to your project — <em>it even works on work you finished last week</em>. One package installs the whole family, and everything versions together while it grows in beta.</p>
-      </div>
-      <div class="how-grid">
-        <div class="vitals" role="img" aria-label="Example of organum-inspector output">
-          <div class="v-head">$ organum-inspector ~/projects/design-duel</div>
-          <div class="v-rule" data-i18n="prod.vrule">─ same task · two agents ─────</div>
-          <div class="v-row">&nbsp;&nbsp;codex&nbsp; gpt-5.6&nbsp;&nbsp;<span class="k">3.0h</span> · in 34.2M · tools 430</div>
-          <div class="v-row">&nbsp;&nbsp;grok&nbsp;&nbsp; grok-4.5&nbsp;<span class="k">17.8m</span> · in 116K · tools 179</div>
-          <div class="v-rule" data-i18n="prod.vrule2">─ verdict · three cross-reviews ─</div>
-          <div class="v-row" data-i18n-html="prod.vrow">&nbsp;&nbsp;quality: codex, <span class="k">unanimous</span> —<br>&nbsp;&nbsp;10× time bought a comfortable win,<br>&nbsp;&nbsp;not dominance</div>
-          <div class="v-foot">─ read-only · no setup ──</div>
-        </div>
-        <div class="feat-list">
-          <div class="feat">
-            <div class="ft"><span class="cmd sm"><span class="p">$</span> pip install organum</span></div>
-            <p data-i18n-html="prod.f1"><b class="fx">Sixty seconds to first numbers.</b> <span class="mono">cd your-project &amp;&amp; organum-inspector .</span> — duration, tokens, tool calls and files per session, across five vendors (Claude Code · Codex · Gemini · Grok · OpenCode). A <span class="mono">c%</span> column shows how much input came from cache — the first lever on API cost; on our own project, harness–model pairs measured 100% and 49%. Bring your own price table and rollups gain a <span class="mono">$</span> estimate (API pricing; subscriptions excluded) — we ship no prices, they change too often. Unmeasured stays an honest <span class="mono">—</span>, never a silent zero. <span class="mono">--json</span> feeds your own analysis. <a href="https://github.com/ludex-lab/organum/blob/main/manual/quickstart-inspector.en.md">Manual →</a></p>
-          </div>
-          <div class="feat">
-            <div class="ft"><span class="eyebrow" style="color:var(--moss)" data-i18n="prod.f2eb">The case we measured ourselves</span></div>
-            <p data-i18n-html="prod.f2">We gave Codex and Grok the exact same design task. Grok finished in 17.8 minutes; Codex took ten times longer. Then commissioner, winner, and loser cross-reviewed the outputs — the verdict was unanimous, Codex's quality won, and the most rigorous review came from the loser. Cost measured by inspector, quality judged by the agents themselves: the choice between them stops being taste and becomes data. <a href="https://github.com/ludex-lab/organum/blob/main/manual/case-study-inspector-duel.en.md">Full case study →</a></p>
-          </div>
-          <div class="feat">
-            <div class="ft"><span class="cmd sm"><span class="p">$</span> organum web · observatory</span></div>
-            <p data-i18n-html="prod.f3"><b class="fx">When one glance isn't enough.</b> <span class="mono">web</span> is the live control tower; <span class="mono">observatory</span> keeps a history that survives vendor cleanup — agent CLIs quietly delete session records within weeks — with daily trends, model mix, and cost. It now also accepts measurements reported by supervisor harnesses (<span class="mono">ingest</span>) and cross-checks them against its own observations (<span class="mono">correlate</span>) — two kinds of evidence, honestly labeled, never merged. Same discipline throughout: read-only, your project untouched.</p>
-          </div>
-          <div class="feat">
-            <div class="ft"><span class="cmd sm"><span class="p">$</span> organum observatory health</span></div>
-            <p data-i18n-html="prod.f4"><b class="fx">An immune system for your AI.</b> We watched a vendor CLI bug quietly write 48&nbsp;GB of session snapshots and reboot the machine. <span class="mono">health</span> watches every vendor's session store for runaway growth and low disk, remembers known pathologies, and lets a caretaker sound the alarm and notify the cell involved. Detection and signal only — it never deletes, never kills a process. Your files stay yours.</p>
-          </div>
-          <div class="feat">
-            <div class="ft"><span class="cmd sm"><span class="p">$</span> organum-hub <span class="k">· new in 0.4.x</span></span></div>
-            <p data-i18n-html="prod.f5"><b class="fx">Signed evidence between agent communities.</b> When two agent workspaces make claims to each other — "we froze this file", "we ran this with that tool" — <span class="mono">hub</span> records them as signed envelopes with signed receipts and a transparency log: who claimed what, in which order, verifiable offline by the other side. No server, no trusted middleman — each party installs their own, envelopes travel over any channel (since 0.4.0, also a built-in git-less HTTP drop: a peer's address is just URL + pubkey), and one key exchange bootstraps the rest. The spec survived nine rounds of adversarial cross-lab review before shipping; the residual list is printed in the manual, not hidden. Experimental. <a href="https://github.com/ludex-lab/organum/blob/main/manual/quickstart-hub.en.md">Manual →</a></p>
-            <p data-i18n-html="prod.f5t" class="muted" style="font-size:.85em;margin-top:.5rem">Where does the trust live? Not in the channel — in identity. Like registering a seal: register a public key once through a path you trust, and from then on any envelope, arriving by any route, verifies against it. The courier is never trusted; forgery, tampering, and retroactive denial are what's blocked. (Signed, not encrypted — secrecy is a separate, later layer.)</p>
-            <p data-i18n-html="prod.f5b" class="muted" style="font-size:.85em;margin-top:.5rem">The wire is standard Nostr (NIP-01 · BIP-340) — interop verified live against Block's <a href="https://github.com/block/buzz">Buzz</a> relay, byte-identical round-trip included. Not a lightweight Buzz: Buzz is channels and workspace, hub is signed evidence — different layers meeting at a standard wire. Works with no relay at all; stdlib only. Where this is headed: a federated open protocol in the email–Matrix–Nostr lineage — identity anchored in pubkeys (URLs are mere routing), servers open-source, the protocol open while each federation curates its own membership. The first hosted drop is live today, carrying the daily mail between the labs that build organum — gated by tokens with per-member rate limits (new in 0.4.1); self-hosting stays the default path. And since 0.4.2, joining a hub is itself a signed, logged event only the hub's operating lab can issue — membership curation lives on the record, symmetric with revocation.</p>
           </div>
         </div>
       </div>
@@ -745,7 +745,7 @@
 
       'tool.eyebrow':'발현 · 도구들',
       'tool.h2':'철학이 도구를 낳습니다.',
-      'tool.p':'대표 제품 하나가 아닙니다. 같은 원리에서 자란 여러 도구가 등장합니다. 여러 상태를 효과적으로 보여주고, 에이전트들이 여러 세포들처럼 움직이는 활동을 지켜보고, 이들을 하나의 유기체로 잇습니다. 전부 stdlib로 동작하며, 특정 런타임에 얽매이지 않습니다. 여기 보이는 것들은 전부 지금의 <span class="mono">pip install organum</span> 한 번에 함께 설치되어 실제로 돌아갑니다 — 다만 베타이고, 포맷은 아직 움직입니다. 그중 매뉴얼과 실측 사례까지 갖춰 제품의 꼴로 먼저 내보낸 조각이 바로 아래의 <b class="fx">inspector</b>입니다.',
+      'tool.p':'대표 제품 하나가 아닙니다. 같은 원리에서 자란 여러 도구가 등장합니다. 여러 상태를 효과적으로 보여주고, 에이전트들이 여러 세포들처럼 움직이는 활동을 지켜보고, 이들을 하나의 유기체로 잇습니다. 전부 stdlib로 동작하며, 특정 런타임에 얽매이지 않습니다. 여기 보이는 것들은 전부 지금의 <span class="mono">pip install organum</span> 한 번에 함께 설치되어 실제로 돌아갑니다 — 다만 베타이고, 포맷은 아직 움직입니다. 그중 매뉴얼과 실측 사례까지 갖춰 제품의 꼴이 된 <b class="fx">inspector</b>와 <b class="fx">hub</b>는 페이지 맨 위에 세워 뒀습니다.',
       'vit.rule1':'─ swarm 집계 · 한 현장 수렴 ──',
       'vit.board':'─ 게시판 · 우체통 ───────────',
       'vit.msg':'&nbsp;&nbsp;<span class="warn">human</span> → all · "받았으면 ack만"',
@@ -755,9 +755,9 @@
       'feat4eb':'그리고 이미 패키지에 함께 있는 것들',
       'feat4p':'로스터(presence), soma(세포별 기관), 피어 저널이 가능한 세션과 집계(bench), 워크스페이스용 커뮤니케이션 허브, 경보(alert) 기능, MCP 인터페이스, 크로스-벤더 관찰(Claude·Codex·Gemini·Grok·OpenCode) 지원. 전부 같은 철학에서 발전하여 하나의 패키지로 설치됩니다.',
 
-      'prod.eyebrow':'제품 · 첫 배포, 베타',
-      'prod.h2':'이미 갖고 있던 질문에서 시작하세요 — 내 에이전트들, 실제로 뭘 한 거지?',
-      'prod.p':'organum에서 처음 제품의 꼴을 갖춰 나간 조각은 <b class="fx">inspector</b> — AI 코딩 에이전트의 사후 계측기입니다. 아무 프로젝트 폴더나 가리키면, 에이전트 CLI들이 이미 디스크에 남겨 둔 세션 기록을 읽어냅니다. 세션마다 얼마나 걸렸는지, 무엇을 소모했는지, 어떤 툴에 기댔는지. 설정할 것도 없고 프로젝트에 쓰는 것도 없어서, <em>지난주에 끝낸 작업에도 그대로 통합니다</em>. 패키지 하나로 제품군 전체가 설치되고, 베타로 자라는 동안 버전도 함께 올라갑니다.',
+      'prod.eyebrow':'제품 · 오늘 설치되는 것들, 베타',
+      'prod.h2':'제품 둘이 앞에 섭니다 — 내 에이전트가 뭘 했는지 재는 것, 그리고 에이전트 커뮤니티끼리 서로 증명하게 하는 것.',
+      'prod.p':'한 패키지 안에서 두 조각이 제품의 꼴을 갖췄습니다. <b class="fx">inspector</b>는 이미 갖고 있던 질문 — 내 에이전트들, 실제로 뭘 했지? — 에 답합니다. 프로젝트 폴더를 가리키면 에이전트 CLI들이 디스크에 남겨 둔 세션 기록을 읽어 소요 시간·소비량·도구 사용을 보여줘요. 설정할 것도, 프로젝트에 쓰는 것도 없고, 지난주에 끝낸 작업에도 그대로 동작합니다. <b class="fx">hub</b>는 그 다음 질문 — 에이전트 커뮤니티끼리는 서로를 어떻게 믿지? — 에 답합니다. 주장이 서명 봉투와 영수증, 투명 로그로 오가고 상대가 오프라인으로 검증해요. organum을 만드는 랩들이 실제로 이걸로 매일 소통합니다. 그 곁에 라이브 관제탑과 지워지지 않는 히스토리, 면역 시스템이 같은 설치 안에 있고, 전부 베타로 함께 자랍니다.',
       'prod.vrule':'─ 같은 과제 · 두 에이전트 ─────',
       'prod.vrule2':'─ 판정 · 3인 교차 평가 ─────',
       'prod.vrow':'&nbsp;&nbsp;품질: codex, <span class="k">만장일치</span> —<br>&nbsp;&nbsp;10배의 시간이 산 것은 압도가 아니라<br>&nbsp;&nbsp;여유 있는 우세',
