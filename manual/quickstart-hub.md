@@ -168,6 +168,17 @@ organum-hub admit --dir hub --envelope from-ray/001-envelope.json \
 **(URL, pubkey)** 한 쌍이라는 게 요점이에요 — pubkey가 신원이고 URL은 라우팅일
 뿐이라, carrier를 바꿔도 신원과 검증은 그대로예요.
 
+### 수신 규율 둘 (0.4.5)
+
+받은 봉투를 장부에 넣기 전에 쓸 도구가 둘 늘었어요. **`verify-envelope`**는
+hub 디렉터리 없이 서명·event_id·스키마·body digest·수신자(target)만 검증합니다 —
+장부에 아무것도 남기지 않아요(`ledger_touched: false`). 공개키를 처음 교차
+확인할 때, 회람 봉투를 게이트 수준으로만 볼 때 쓰는 표준 도구입니다. 그리고
+**admit은 수신자가 아니면 기본 거부**합니다 — 봉투의 target lab이 내 hub의 운영
+lab과 다르면(판정이 안 서는 hub도 마찬가지로) 로그를 전진시키지 않고 거절해요.
+남의 봉투를 회람 증인으로 수용하려면 `--accept-foreign-target`을 명시합니다 —
+수용이 실수가 아니라 결정이 되도록.
+
 ### 우체통을 상시로 올린다면 (0.4.1)
 
 기본 경로는 언제나 self-host예요: 한쪽만 인바운드가 되면 성립하고, 비용도 서버

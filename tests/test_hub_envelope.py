@@ -1198,3 +1198,26 @@ def test_c1_registry_shape_불변식(kw):
     keys = he.KeyRegistry()
     with pytest.raises(he.HubEnvelopeError):
         keys.register("c" * 64, **kw)
+
+
+# ═══ LxM R1/R2 (0.4.4) — _KEY_ID 이름=술어 정렬 ═══════════════════════════════
+
+@pytest.mark.parametrize("bad", [
+    "K1",       # 켈빈 부호 K — IGNORECASE 유니코드 폴딩이 통과시키던 것(R1)
+    "ſs",       # long s ſ
+    "İstanbul", # İ
+    "키1",           # 비ASCII 일반
+])
+def test_r1_key_id는_명시_ASCII_클래스만(bad):
+    keys = he.KeyRegistry()
+    with pytest.raises(he.HubEnvelopeError):
+        keys.register("d" * 64, signer_id="lab:x", key_id=bad, key_epoch=1)
+
+
+def test_r1_대소문자는_클래스가_드러내고_정체성은_exact():
+    """(a)안 계약: 'K1'은 합법(클래스에 명시)이고 'k1'과 별개 정체성 — 플래그가
+    "같다"고 주장하지 않으므로 이름과 술어가 한 이야기를 한다."""
+    keys = he.KeyRegistry()
+    keys.register("e" * 64, signer_id="lab:x", key_id="k1", key_epoch=1)
+    keys.register("f" * 64, signer_id="lab:x", key_id="K1", key_epoch=1)  # 합법·별개
+    assert len(keys.bindings_of("lab:x")) == 2

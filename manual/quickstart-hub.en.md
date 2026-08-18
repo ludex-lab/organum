@@ -178,6 +178,19 @@ point is that a peer's address is the pair **(URL, pubkey)** — the pubkey is
 the identity and the URL is mere routing, so you can swap carriers without
 touching identity or verification.
 
+### Two receiving disciplines (0.4.5)
+
+Two tools landed for the moment before an envelope enters your ledger.
+**`verify-envelope`** checks signature, event_id, schema, body digest, and the
+addressee (target) with no hub directory at all — it touches no ledger
+(`ledger_touched: false`). It's the standard tool for first-time key
+cross-checks and for gate-level reads of circulated envelopes. And **admit now
+refuses non-addressees by default** — if an envelope's target lab isn't your
+hub's operating lab (or your hub can't establish one), the log does not
+advance. Accepting someone else's envelope as a circulation witness takes an
+explicit `--accept-foreign-target` — so acceptance is a decision, never an
+accident.
+
 ### If you keep a drop running (0.4.1)
 
 The default path is always self-host: it works as soon as one side accepts

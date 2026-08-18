@@ -294,7 +294,64 @@ def cmd_admit(a):
         raise HubCliError("--sig 또는 --sig-file 중 하나만")
     sig = a.sig or Path(a.sig_file).read_text(encoding="utf-8").strip()
     env = json.loads(Path(a.envelope).read_text(encoding="utf-8"))
+    # 0.4.5(비수신자 admit 실사고 3건): addressed 봉투의 target lab이 이 hub의 운영
+    # lab과 다르면 기본 거부 — 회람 증인 admit은 --accept-foreign-target으로 **명시**
+    # 한다(admit=증인, 재판정=별도 행위 관례). 판정은 CLI 층이다: 봉투 층은 witness
+    # hub를 금지하지 않으므로 정책이 아니라 소비 규율로 건다.
+    # 층 분리 명문(Ludex 0.4.5 판정 ③): 이 게이트는 **수신(cmd_admit) 전용**이다 —
+    # 발신(cmd_message 등 _sign_admit 자기서명 경로)은 타 lab을 target하는 것이
+    # 본래 목적이므로 게이트 밖이 의도다. 리팩터 시 이 경계를 옮기지 말 것.
+    tgt = ((env.get("payload") or {}).get("target") or {}) \
+        if env.get("event_kind") in he.ADDRESSED_KINDS else {}
+    if tgt.get("lab_id") and not a.accept_foreign_target:
+        own = hub._introducer_authority()      # 운영 lab 파생(r3 규칙 공유)
+        # r2(LxM R1·Orin 반례): own=None을 `and own`으로 단락시키면 fail-open —
+        # 보호가 가장 필요한(파생 안 되는) hub가 정확히 보호를 못 받는다.
+        # r3 계보 그대로 파생 불가 = fail-closed.
+        if own is None:
+            raise HubCliError(
+                "운영 lab 파생 불가(fail-closed) — 이 hub의 source_domain에서 "
+                "운영 lab을 세울 수 없어 수신자 판정이 불가합니다. addressed 봉투 "
+                "수용은 --accept-foreign-target을 명시하세요")
+        if tgt["lab_id"] != own:
+            raise HubCliError(
+                f"수신자가 아니다 — target {tgt['lab_id']}, 이 hub 운영 lab {own}. "
+                "회람 증인으로 수용하려면 --accept-foreign-target을 명시하세요")
     return _print_result(_admit_and_log(d, hub, he.canonical_bytes(env), sig, a.pubkey))
+
+
+def cmd_verify_envelope(a):
+    """장부 무접촉 검증(0.4.5, LxM 제안) — "검증하고 싶었을 뿐인데 장부에 남기는 것
+    말고는 길이 없었다"의 해소. hub 디렉터리를 받지 않는다: 서명·event_id·스키마
+    shape·(옵션) body digest·target 표시만. registry/정책/로그는 건드리지도 필요하지도
+    않다 — TOFU 교차 확인·회람 게이트 검증의 표준 도구."""
+    if bool(a.sig) == bool(a.sig_file):
+        raise HubCliError("--sig 또는 --sig-file 중 하나만")
+    sig = a.sig or Path(a.sig_file).read_text(encoding="utf-8").strip()
+    env = json.loads(Path(a.envelope).read_text(encoding="utf-8"))
+    raw = he.canonical_bytes(env)
+    try:
+        sig_ok = sp.verify(bytes.fromhex(sig), hashlib.sha256(raw).digest(),
+                           bytes.fromhex(a.pubkey))
+    except (ValueError, TypeError):
+        sig_ok = False
+    body_match = None
+    if a.body:
+        want = ((env.get("payload") or {}).get("body_sha256"))
+        body_match = bool(want) and \
+            hashlib.sha256(Path(a.body).read_bytes()).hexdigest() == want
+    out = {"valid_signature": sig_ok,
+           "event_id": he.event_id_of(raw),
+           "signer": env.get("signer"),
+           "event_kind": env.get("event_kind"),
+           "target": ((env.get("payload") or {}).get("target")
+                      if env.get("event_kind") in he.ADDRESSED_KINDS else None),
+           "schema_problems": he.validate_envelope(env),
+           "body_sha256_match": body_match,
+           "ledger_touched": False}
+    print(json.dumps(out, ensure_ascii=False, indent=1))
+    return 0 if (sig_ok and not out["schema_problems"]
+                 and body_match in (None, True)) else 1
 
 
 def cmd_rotate_key(a):
@@ -557,7 +614,15 @@ def main(argv=None) -> int:
                               ("--sig", {"default": None}),
                               ("--sig-file", {"default": None}),
                               ("--pubkey", {"required": True}),
-                              ("--receipt-key", {"default": None})]),
+                              ("--receipt-key", {"default": None}),
+                              ("--accept-foreign-target",
+                               {"action": "store_true"})]),
+        ("verify-envelope", cmd_verify_envelope,
+         [("--envelope", {"required": True}),
+          ("--sig", {"default": None}),
+          ("--sig-file", {"default": None}),
+          ("--pubkey", {"required": True}),
+          ("--body", {"default": None})]),
         ("export", cmd_export, [("--dir", {"required": True}),
                                 ("--out", {"required": True}),
                                 ("--event-id", {"default": None}),

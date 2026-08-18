@@ -54,7 +54,11 @@ _MAX_INT = 2**53          # JS/Nostr 생태계 interop — 이 밖의 정수는 
 
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _LAB_ID = re.compile(r"lab:[a-z0-9][a-z0-9._-]{0,63}\Z")
-_KEY_ID = re.compile(r"[a-z0-9][a-z0-9._:-]{0,127}\Z", re.IGNORECASE)
+# LxM R1/R2(0.4.4): IGNORECASE는 ASCII가 아니라 유니코드 케이스 폴딩이다 — 켈빈 K(U+212A)·
+# long s(U+017F)·İ(U+0130)가 통과했고, 문법은 case-insensitive인데 정체성 tuple은
+# case-sensitive라 'k1'/'K1' confusable 쌍이 성립했다. 교정: 플래그 제거 + 명시 클래스
+# (대문자는 클래스가 드러내고, 정체성은 exact) — 이름과 술어가 한 이야기를 한다.
+_KEY_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 _SUBJECT_PREFIX = {"run": "run:", "artifact": "artifact:", "creature": "creature:",
                    "machine": "machine:", "message": "message:", "route": "route:"}
 _SUBJECT_ID = re.compile(r"[a-z]+:[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\Z")

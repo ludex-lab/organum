@@ -563,3 +563,92 @@ def test_i1_r3_bare_name_source_domain은_bootstrap_교차확인으로_파생(ca
                 "--new-pubkey", c["pubkey"])
     assert rc == 1 and not r["admitted"]
     assert any("authority" in p for p in r["problems"])
+
+
+# ═══ 0.4.5 — verify-envelope(장부 무접촉) + admit 비수신자 기본 거부 ═══════════
+
+def _msg_env(frm, to_lab, body: bytes):
+    return {"envelope_schema": he.ENVELOPE_SCHEMA, "event_kind": "message.posted",
+            "signer": {"id": frm, "key_id": "k1", "key_epoch": 1},
+            "subject": {"type": "message", "id": "message:t-1"},
+            "provenance": {"lab": frm, "machine": "m-t01", "platform": "linux",
+                           "adapter": "t/1.0", "cli_version": None, "capture": None},
+            "idempotency_key": f"t-{to_lab}-1", "created_at": "2026-08-18T01:00:00Z",
+            "payload": {"body_locator": None, "body_media_type": "text/markdown",
+                        "body_sha256": hashlib.sha256(body).hexdigest(),
+                        "target": {"lab_id": to_lab, "to_id": "Cody", "to_epoch": 1}}}
+
+
+def test_verify_envelope는_장부_무접촉_검증(capsys, ws):
+    """[0.4.5 LxM 제안] 서명·event_id·스키마·body digest 검증만 — hub 디렉터리를
+    받지 않으며 어떤 장부도 만들거나 건드리지 않는다."""
+    _, k = run(capsys, "keygen", "lab-v")
+    body = "회람 본문".encode("utf-8")
+    Path("v-body.md").write_bytes(body)
+    env = _msg_env("lab:v", "lab:other", body)
+    Path("v-env.json").write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
+    rc, sig = run(capsys, "sign", "--key", "lab-v.seed", "--envelope", "v-env.json")
+    rc, r = run(capsys, "verify-envelope", "--envelope", "v-env.json",
+                "--sig", sig["sig"], "--pubkey", sig["pubkey"],
+                "--body", "v-body.md")
+    assert rc == 0 and r["valid_signature"] is True
+    assert r["schema_problems"] == [] and r["body_sha256_match"] is True
+    assert r["target"]["lab_id"] == "lab:other" and r["ledger_touched"] is False
+    assert not (ws / "hub").exists()                      # 장부 무접촉의 물증
+    # 변조 서명은 실패로
+    bad = ("0" * 128) if sig["sig"][0] != "0" else ("1" * 128)
+    rc, r = run(capsys, "verify-envelope", "--envelope", "v-env.json",
+                "--sig", bad, "--pubkey", sig["pubkey"])
+    assert rc == 1 and r["valid_signature"] is False
+
+
+def test_admit_비수신자_기본_거부_회람은_명시_플래그(capsys, ws):
+    """[0.4.5 실사고 3건] addressed 봉투의 target lab ≠ 운영 lab이면 기본 거부 +
+    로그 무전이; --accept-foreign-target 명시 시에만 회람 증인으로 수용."""
+    a_pub, b_pub, _ = _setup(capsys, ws)                  # hub = lab:a/hub
+    body = b"foreign"
+    for to_lab, name in (("lab:zzz", "f"), ("lab:a", "m")):
+        env = _msg_env("lab:b", to_lab, body)
+        Path(f"{name}.json").write_text(json.dumps(env, ensure_ascii=False),
+                                        encoding="utf-8")
+    rc, s_f = run(capsys, "sign", "--key", "lab-b.seed", "--envelope", "f.json")
+    rc, s_m = run(capsys, "sign", "--key", "lab-b.seed", "--envelope", "m.json")
+
+    # ① 비수신자 → 기본 거부, 로그 무전이
+    rc, _out = run(capsys, "admit", "--dir", "hub", "--envelope", "f.json",
+                   "--sig", s_f["sig"], "--pubkey", s_f["pubkey"])
+    assert rc == 2                       # HubCliError 거부(메시지는 stderr)
+    # ② 자기 수신 → 평소대로 admit (거부가 seq를 안 먹은 증거 = seq 1)
+    rc, r = run(capsys, "admit", "--dir", "hub", "--envelope", "m.json",
+                "--sig", s_m["sig"], "--pubkey", s_m["pubkey"])
+    assert rc == 0 and r["admitted"] and r["accepted_seq"] == 1
+    # ③ 회람 증인은 명시 플래그로
+    rc, r = run(capsys, "admit", "--dir", "hub", "--envelope", "f.json",
+                "--sig", s_f["sig"], "--pubkey", s_f["pubkey"],
+                "--accept-foreign-target")
+    assert rc == 0 and r["admitted"] and r["accepted_seq"] == 2
+
+
+def test_r2_own_파생불가_hub는_addressed_admit_fail_closed(capsys, ws):
+    """[LxM R1·Orin 반례] 운영 lab 파생이 None인 hub(bare name·무결속)에서
+    addressed 봉투가 무플래그로 통과하던 fail-open 폐쇄 — 파생 불가 = 기본 거부,
+    로그 무전이; 수용은 명시 플래그로만."""
+    _, o = run(capsys, "keygen", "lab-o")
+    rc, _ = run(capsys, "init", "--dir", "hub", "--source-domain", "solo")  # 파생 불가
+    assert rc == 0
+    rc, _ = run(capsys, "register-key", "--dir", "hub", "--signer", "lab:other",
+                "--key-id", "k1", "--epoch", "1", "--pubkey", o["pubkey"])
+    assert rc == 0
+    body = b"x"
+    env = _msg_env("lab:other", "lab:zzz", body)
+    Path("z.json").write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
+    rc, s = run(capsys, "sign", "--key", "lab-o.seed", "--envelope", "z.json")
+    # 무플래그 → fail-closed 거부 (종전: admitted seq 1이 나오던 P4 반례)
+    rc, _out = run(capsys, "admit", "--dir", "hub", "--envelope", "z.json",
+                   "--sig", s["sig"], "--pubkey", s["pubkey"])
+    assert rc == 2
+    # 명시 플래그 → 수용, 그리고 거부가 seq를 안 먹었다는 증거(seq 1)
+    rc, r = run(capsys, "admit", "--dir", "hub", "--envelope", "z.json",
+                "--sig", s["sig"], "--pubkey", s["pubkey"],
+                "--accept-foreign-target")
+    assert rc == 0 and r["admitted"] and r["accepted_seq"] == 1
