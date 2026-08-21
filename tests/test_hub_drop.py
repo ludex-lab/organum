@@ -243,3 +243,44 @@ def test_클라이언트_timeout_인자_배선(drop, tmp_path):
     (sdir / "001-envelope.json").write_bytes(b'{"n":1}')
     got = hd.pull_quads(f"{url}/v0/ch/from-a", token, tmp_path / "in", timeout=5)
     assert got == ["001"]
+
+
+def test_워밍업은_무인증이고_HTTPError를_생존으로_센다(drop):
+    """[0.4.6 LxM 008–010 + Ludex 명세] ① 401/404는 '인스턴스가 섰다'는 증거라
+    성공으로 센다(실패로 세면 토큰 틀린 멤버가 콜드스타트를 오진한다) ② 어떤 실패도
+    예외로 새지 않는다 — 워밍업은 보험이지 게이트가 아니다."""
+    url, _token, _root = drop
+    assert hd._warm(f"{url}/v0/ch/from-a") is True          # 401이지만 생존
+    assert hd._warm(f"{url}/v0/nope/../..") is True         # 404도 생존
+    # 죽은 포트 — False를 돌려줄 뿐 예외를 던지지 않는다(본 호출을 못 죽인다)
+    assert hd._warm("http://127.0.0.1:1/v0/ch/from-a", timeout=2) is False
+
+
+def test_인증실패는_limiter_호출_전_반환_무토큰GET_후_잔여예산_불변(tmp_path):
+    """[LxM 009/010 확정 문구 — 기전+관측] 앞 절이 기전, 뒤 절이 관측이다:
+    게이트 순서를 바꾸면 기전에서 먼저 깨지므로 이 테스트가 증상이 아니라 원인을
+    가리킨다. (0.4.1의 '401은 예산을 안 먹는다' 결정이 이제 기계가 된다 —
+    무인증 워밍업이 공짜인 성질이 여기에 걸려 있다.)"""
+    tok = tmp_path / "tokens.txt"
+    tok.write_text("member-a\n", encoding="utf-8")
+    srv = hd.make_server(tmp_path / "drops", tok, bind="127.0.0.1", port=0,
+                         rate_limit_per_minute=2)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        host = f"127.0.0.1:{srv.server_address[1]}"
+
+        def get(token=None):
+            conn = http.client.HTTPConnection(host, timeout=10)
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            conn.request("GET", "/v0/ch/from-a", headers=headers)
+            st = conn.getresponse().status
+            conn.close()
+            return st
+
+        for _ in range(30):                       # 무토큰 GET 30연발 — 전부 401
+            assert get() == 401
+        assert get("member-a") == 200             # 예산 2 그대로
+        assert get("member-a") == 200
+        assert get("member-a") == 429             # 소비는 유효 토큰 2회뿐
+    finally:
+        srv.shutdown()

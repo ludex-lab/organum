@@ -178,6 +178,15 @@ point is that a peer's address is the pair **(URL, pubkey)** — the pubkey is
 the identity and the URL is mere routing, so you can swap carriers without
 touching identity or verification.
 
+### Waking is automatic (0.4.6)
+
+`push` and `pull` send one **unauthenticated GET** before the real request, to wake a
+sleeping server. It covers the case where free hosting drops your first call after
+idling. No token rides along, so it spends none of your rate-limit budget, and if the
+wake-up fails the real call proceeds anyway — insurance, not a gate. The result carries
+`warm_ms`, which is a **gauge of whether the host is warm right now**: tens or hundreds
+of milliseconds means it was already up; tens of thousands means you just woke it.
+
 ### Two receiving disciplines (0.4.5)
 
 Two tools landed for the moment before an envelope enters your ledger.

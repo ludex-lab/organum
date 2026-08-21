@@ -57,6 +57,7 @@ _WINDOW_SECONDS = 60.0
 CLIENT_TIMEOUT_SECONDS = 90         # 콜드스타트(~1분, free hosted) 실측이 정한 기본값
                                     # — Ludex 관찰: 종전 30s 고정이 콜드스타트와 겹쳐
                                     # 핸드셰이크 EOF로 보였다. 재푸시는 dedup 멱등.
+WARMUP_TIMEOUT_SECONDS = 20         # 무인증 깨우기 GET (0.4.6) — 예산 무소비(_warm)
 
 _CHANNEL_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _SENDER_RE = re.compile(r"^from-[a-z0-9][a-z0-9-]{0,63}$")
@@ -287,6 +288,45 @@ def make_server(root: str | Path, token_file: str | Path,
 
 # ── 클라이언트 ──────────────────────────────────────────────────────────────
 
+def _warm(url: str, timeout: int = WARMUP_TIMEOUT_SECONDS) -> bool:
+    """콜드스타트 깨우기 — **무인증 bare GET** (0.4.6, LxM 008–010 + Ludex 명세).
+
+    두 줄이 명세다:
+    ① **HTTPError는 생존으로 센다.** 401·404 둘 다 "인스턴스가 섰다"는 증거다 —
+      워밍업이 확인하는 것은 인증이 아니라 생존이다. 실패로 세면 **진단이 뒤집힌다**:
+      토큰이 틀린 멤버가 "콜드스타트가 안 풀린다"고 보고하게 된다.
+    ② **어떤 실패도 본 호출을 죽이지 않는다** — 워밍업은 보험이지 게이트가 아니다.
+      깨우기 실패로 봉투를 안 보내면 새 실패 경로를 만드는 셈이다.
+
+    **본체에 두는 이유**(Ludex 발견, LxM 010): 클라이언트마다 각자 구현하면 누군가는
+    토큰을 실어 보내고, 그 순간 워밍업이 멤버 예산을 먹기 시작한다. 무인증 GET이
+    공짜인 성질(`_gate()`가 인증 실패를 limiter 호출 **전**에 반환)은 "무인증"이
+    지켜질 때만 성립하므로, 규율이 아니라 **코드로 고정한다**."""
+    try:
+        with urllib.request.urlopen(
+                urllib.request.Request(url, method="GET"), timeout=timeout):
+            return True
+    except urllib.error.HTTPError:
+        return True                      # ① 401/404 = 인스턴스 생존
+    except Exception:                    # ② 네트워크·TLS·타임아웃 전부 삼킨다
+        return False
+
+
+def _warm_measured(url: str, stats: dict | None = None) -> bool:
+    """워밍 + **지연 계측**(0.4.6). 호스트가 "이 시각엔 따뜻하다"고 공지할 때,
+    그 공지의 생사는 약속이 아니라 **관측**으로 판정돼야 한다 —
+    *"등록되어 있다는 것과 오늘 아침에 돌았다는 것은 다른 사실이다"*(LxM 022).
+
+    멤버의 평상 트래픽이 그대로 증거가 된다: 공지 시각에 `warm_ms`가 수십 ms면
+    시간표가 돌았고, 수만 ms면 안 돌았다. 추가 요청도 새 인프라도 없다."""
+    t0 = time.monotonic()
+    ok = _warm(url)
+    if stats is not None:
+        stats["warm_ms"] = int((time.monotonic() - t0) * 1000)
+        stats["warm_ok"] = ok
+    return ok
+
+
 def _request(url: str, token: str, data: bytes | None = None,
              timeout: int = CLIENT_TIMEOUT_SECONDS) -> dict:
     req = urllib.request.Request(
@@ -305,8 +345,14 @@ def _request(url: str, token: str, data: bytes | None = None,
 
 
 def push_quad(url: str, token: str, quad_prefix: str | Path,
-              timeout: int = CLIENT_TIMEOUT_SECONDS) -> dict:
-    """export가 만든 quad(`<dir>/NNN` 접두)를 POST. 같은 내용 재전송은 dedup 수렴."""
+              timeout: int = CLIENT_TIMEOUT_SECONDS, warmup: bool = True,
+              stats: dict | None = None) -> dict:
+    """export가 만든 quad(`<dir>/NNN` 접두)를 POST. 같은 내용 재전송은 dedup 수렴.
+
+    `stats` dict를 주면 워밍 계측(`warm_ms`·`warm_ok`)을 채워 준다 — 반환 모양은
+    안 바꾼다(교차 랩 소비 계약 보존)."""
+    if warmup:
+        _warm_measured(url, stats)
     prefix = Path(quad_prefix)
     n = prefix.name
     if not _N_RE.match(n):
@@ -328,10 +374,15 @@ def push_quad(url: str, token: str, quad_prefix: str | Path,
 
 def pull_quads(url: str, token: str, dest: str | Path,
                since: str | None = None,
-               timeout: int = CLIENT_TIMEOUT_SECONDS) -> list[str]:
+               timeout: int = CLIENT_TIMEOUT_SECONDS,
+               warmup: bool = True, stats: dict | None = None) -> list[str]:
     """새 quad를 받아 로컬 우체통 트리에 내려쓴다. since 생략 시 로컬 최대 NNN부터.
 
-    로컬도 append-only 우편함이다 — 이미 있는 파일은 절대 덮어쓰지 않는다."""
+    로컬도 append-only 우편함이다 — 이미 있는 파일은 절대 덮어쓰지 않는다.
+
+    `stats` dict를 주면 워밍 계측(`warm_ms`·`warm_ok`)을 채워 준다."""
+    if warmup:
+        _warm_measured(url, stats)
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     if since is None:

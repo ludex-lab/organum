@@ -180,6 +180,42 @@ class Inv6_표시는_실동작과_일치(unittest.TestCase):
         self.assertEqual(organum.__version__, version("organum"))
         self.assertNotEqual(organum.__version__, "0.0.1")      # 유령 버전 회귀 방지
 
+    # 벤더 목록은 **하중 선언인데 사본이 여럿**이다(등록부 + 모듈 docstring + 퀵스타트
+    # 2 + 공개면 4~5). LxM 실측 법칙: *표류 수명은 사본 수가 아니라 **두 사본을 교차하는
+    # 경로가 얼마나 드물게 밟히느냐**에 비례한다*. 벤더 추가는 드문 경로라 위험군이었다.
+    # 이 테스트가 그 교차를 **매 실행 밟히는 경로로** 바꾼다 — 7번째 벤더를 붙이면
+    # 문서 세 곳이 시끄럽게 실패한다.
+    # (등록부 이름 → 공개 표시 토큰 매핑 자체가 계약이다: agy는 문서에 'Gemini'로 선다.)
+    VENDOR_DISPLAY = {"claude": "Claude", "codex": "Codex", "agy": "Gemini",
+                      "grok": "Grok", "opencode": "OpenCode", "cursor": "Cursor"}
+
+    def test_vendor_list_single_source(self):
+        import re
+        from pathlib import Path as _P
+        from organum import adapters
+        names = [a.name for a in adapters.ADAPTERS]
+        self.assertEqual(sorted(names), sorted(self.VENDOR_DISPLAY),
+                         "등록부에 새 벤더가 늘었다 — VENDOR_DISPLAY 매핑과 문서 3곳을 "
+                         "함께 갱신하라(이 실패가 그 교차 경로다)")
+        root = _P(__file__).resolve().parent.parent
+        insp = (root / "src" / "organum" / "inspector.py").read_text(encoding="utf-8")
+        head = insp[:1200]
+        m = re.search(r"(\d+)\s*벤더", head)
+        self.assertIsNotNone(m, "inspector docstring에 'N벤더' 표기가 없다")
+        self.assertEqual(int(m.group(1)), len(names),
+                         "docstring의 벤더 수가 등록부와 다르다")
+        # 퀵스타트 위치는 트리마다 다르다: dev=docs/, public cut=manual/(화이트리스트
+        # 리맵). 한쪽만 보면 다른 트리에서 **조용히 공허해진다** — 그래서 양쪽을 찾고
+        # 하나도 못 찾으면 시끄럽게 실패한다(스킵 금지: 초록불 거짓말 방지).
+        quickstarts = [q for d in ("docs", "manual")
+                       for q in sorted((root / d).glob("quickstart-inspector*.md"))]
+        self.assertTrue(quickstarts, "quickstart-inspector 문서를 docs/·manual/ 어디서도 "
+                                     "못 찾았다 — 트리 모양이 바뀌었나?")
+        for doc in [head] + [q.read_text(encoding="utf-8") for q in quickstarts]:
+            for n in names:
+                self.assertIn(self.VENDOR_DISPLAY[n], doc,
+                              f"문서에 {n}({self.VENDOR_DISPLAY[n]}) 표기가 빠졌다")
+
     def test_budget_floor_is_loud(self):
         import contextlib
         import io

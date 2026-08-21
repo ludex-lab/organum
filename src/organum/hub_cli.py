@@ -534,21 +534,25 @@ def cmd_serve(a):
 
 def cmd_push(a):
     token = hd.load_tokens(a.token_file)[0]
+    st: dict = {}
     try:
-        r = hd.push_quad(a.url, token, a.quad, timeout=a.timeout)
+        r = hd.push_quad(a.url, token, a.quad, timeout=a.timeout, stats=st)
     except (ValueError, hd.DropError) as e:
         raise HubCliError(str(e))
-    print(json.dumps(r, ensure_ascii=False))
+    print(json.dumps({**r, **st}, ensure_ascii=False))
     return 0
 
 
 def cmd_pull(a):
     token = hd.load_tokens(a.token_file)[0]
+    st: dict = {}
     try:
-        ns = hd.pull_quads(a.url, token, a.dest, since=a.since, timeout=a.timeout)
+        ns = hd.pull_quads(a.url, token, a.dest, since=a.since, timeout=a.timeout,
+                           stats=st)
     except (ValueError, hd.DropError) as e:
         raise HubCliError(str(e))
-    print(json.dumps({"pulled": ns, "dest": str(Path(a.dest))}, ensure_ascii=False))
+    print(json.dumps({"pulled": ns, "dest": str(Path(a.dest)), **st},
+                     ensure_ascii=False))
     return 0
 
 
