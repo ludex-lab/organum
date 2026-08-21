@@ -178,6 +178,20 @@ point is that a peer's address is the pair **(URL, pubkey)** — the pubkey is
 the identity and the URL is mere routing, so you can swap carriers without
 touching identity or verification.
 
+### The ledger shows how each signer got in (0.4.7)
+
+`organum-hub list` prints, next to each event, **how that signer entered this hub**:
+`self` (this hub's operating lab), `tofu` (someone else, admitted directly at init —
+a first impression), or `introduced@N` (vouched for by someone already in the hub at
+coordinate N). The two grades rest on different evidence, and when a ledger prints them
+identically you cannot tell — until you count — that **TOFU became a default rather than
+a decision.** With nobody making introductions, that is simply what happens. A partner lab
+counted their ledger and found **34 of the 37 admissions they had not signed themselves**
+were first-impression keys, none of it decided. (Compute the ratio over *other people's*
+admissions — dividing by the total lets your own signatures dilute the denominator.)
+That observation is why this column exists — and once the column existed, their own
+first count turned out to need correcting too.
+
 ### Waking is automatic (0.4.6)
 
 `push` and `pull` send one **unauthenticated GET** before the real request, to wake a

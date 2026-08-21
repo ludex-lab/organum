@@ -652,3 +652,39 @@ def test_r2_own_파생불가_hub는_addressed_admit_fail_closed(capsys, ws):
                 "--sig", s["sig"], "--pubkey", s["pubkey"],
                 "--accept-foreign-target")
     assert rc == 0 and r["admitted"] and r["accepted_seq"] == 1
+
+
+def test_list는_tofu와_소개받은_서명자를_구분해_보여준다(capsys, ws):
+    """[Ludex 0.4.7 지적] 원장이 두 등급을 똑같이 인쇄하면 TOFU가 '결정'이 아니라
+    기본값이 된 것을 세기 전엔 모른다. bootstrap(첫인상)과 introduced(hub 안의
+    누군가가 보증)는 신뢰 근거가 다르므로 표면에서 갈라야 한다."""
+    a_pub, b_pub, _ = _setup(capsys, ws)          # lab:a·lab:b = init 때 등록 = tofu
+    Path("f.txt").write_text("x", encoding="utf-8")
+    run(capsys, "attest", "--dir", "hub", "--key", "lab-a.seed", "--signer", "lab:a",
+        "--key-id", "k1", "--epoch", "1", "--file", "f.txt",
+        "--claim", "core:artifact.frozen", "--scope", "s")
+    _, c = run(capsys, "keygen", "lab-c")
+    rc, intro = run(capsys, "introduce-signer", "--dir", "hub", "--key", "lab-a.seed",
+                    "--signer", "lab:a", "--key-id", "k1", "--epoch", "1",
+                    "--new-signer", "lab:c", "--new-key-id", "k1", "--new-epoch", "1",
+                    "--new-pubkey", c["pubkey"])
+    assert rc == 0
+    env_c = {"envelope_schema": he.ENVELOPE_SCHEMA, "event_kind": "message.read",
+             "signer": {"id": "lab:c", "key_id": "k1", "key_epoch": 1},
+             "subject": {"type": "run", "id": "run:g-1"},
+             "provenance": {"lab": "lab:c", "machine": "m-c", "platform": "linux",
+                            "adapter": "t/1.0", "cli_version": None, "capture": None},
+             "idempotency_key": "c-g-1", "created_at": "2026-08-21T01:00:00Z",
+             "payload": {"cursor": "c-0"}}
+    Path("cg.json").write_text(json.dumps(env_c, ensure_ascii=False), encoding="utf-8")
+    rc, sig = run(capsys, "sign", "--key", "lab-c.seed", "--envelope", "cg.json")
+    rc, _ = run(capsys, "admit", "--dir", "hub", "--envelope", "cg.json",
+                "--sig", sig["sig"], "--pubkey", sig["pubkey"])
+    assert rc == 0
+    rc, out = run(capsys, "list", "--dir", "hub")
+    assert rc == 0
+    lines = [l for l in str(out).splitlines() if l.strip()]
+    a_rows = [l for l in lines if "lab:a" in l]   # hub = lab:a/hub → 운영 lab
+    c_rows = [l for l in lines if "lab:c" in l]
+    assert a_rows and all("self" in l for l in a_rows)          # 운영 lab = 자기 자신
+    assert c_rows and all("introduced@" in l for l in c_rows)   # 보증받은 서명자

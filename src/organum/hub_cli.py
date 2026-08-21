@@ -437,6 +437,29 @@ def cmd_export(a):
     return 0
 
 
+def _signer_grade(hub, signer_id: str) -> str:
+    """이 서명자의 키가 **어떻게 이 hub에 들어왔나** — 0.4.7(Ludex 지적).
+
+    두 등급은 신뢰 근거가 다른데 원장이 똑같이 인쇄하고 있었다: bootstrap 결속
+    (`valid_from_seq == 0`)은 init 때 우리가 **직접 받아들인 첫인상(TOFU)**이고,
+    도입 결속(`> 0`)은 **이 hub 안의 누군가가 보증한** 것이다. Ludex 실측 —
+    수용 54건 중 31건이 TOFU였고 **아무도 그렇게 결정한 적이 없었다**(소개하는 사람이
+    없으면 기본값이 된다). 세기 전에 몰랐던 이유가 이 표시의 부재였다.
+
+    첫 구현은 bootstrap 전부를 `tofu`로 셌는데, 우리 원장에 대보니 31건이 **전부
+    우리 자신**이었다 — **자기 등록을 첫인상으로 세는 것도 거짓말**이라 셋으로 가른다:
+    `self`(이 hub의 운영 lab) · `tofu`(남인데 init 때 직접 받아들임) ·
+    `introduced@N`(hub 안의 누군가가 좌표 N에서 보증)."""
+    bindings = hub.keys.bindings_of(signer_id)
+    if not bindings:
+        return "unregistered"
+    if signer_id == hub._introducer_authority():
+        return "self"                      # 자기 자신 — 신뢰 판단이 아니다
+    if any(b["valid_from_seq"] == 0 for b in bindings):
+        return "tofu"                      # 남을 init 때 직접 받아들임 = 첫인상
+    return f"introduced@{min(b['valid_from_seq'] for b in bindings) - 1}"
+
+
 def cmd_list(a):
     d, cfg, hub = _load(a.dir)
     for line in (d / "events.jsonl").read_text(encoding="utf-8").splitlines():
@@ -447,7 +470,8 @@ def cmd_list(a):
                               else rec["event"]["content"]).encode("utf-8"))
         r = hub.get(eid)
         print(f"{r['accepted_seq']:>4}  {env['event_kind']:<26} {env['signer']['id']:<20} "
-              f"{eid[:16]}…  {'authority' if r['authority_projected'] else 'transport-only'}")
+              f"{_signer_grade(hub, env['signer']['id']):<14} {eid[:16]}…  "
+              f"{'authority' if r['authority_projected'] else 'transport-only'}")
     return 0
 
 
