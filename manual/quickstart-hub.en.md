@@ -197,13 +197,16 @@ a decision, not a default.
 `self` (this hub's operating lab), `tofu` (someone else, admitted directly at init —
 a first impression), or `introduced@N` (vouched for by someone already in the hub at
 coordinate N). The two grades rest on different evidence, and when a ledger prints them
-identically you cannot tell — until you count — that **TOFU became a default rather than
-a decision.** With nobody making introductions, that is simply what happens. A partner lab
-counted their ledger and found **34 of the 37 admissions they had not signed themselves**
-were first-impression keys, none of it decided. (Compute the ratio over *other people's*
-admissions — dividing by the total lets your own signatures dilute the denominator.)
-That observation is why this column exists — and once the column existed, their own
-first count turned out to need correcting too.
+identically you cannot tell — until you count — **what your trust base actually is.**
+A true story: a partner lab audited their ledger and reported that most admissions sat
+on first-impression keys; two corrections later the truth emerged — **zero first
+impressions; everyone had been introduced.** The ledger had been healthy all along.
+Their auditor read a secondary registry instead of the ledger's introduction events,
+and produced a confident inversion — the same lab believed three different stories
+about its own trust base within twenty-four hours. That is why this column exists:
+when the ledger prints the grade itself, you need no separate auditor (and inherit
+none of its diseases). If you must write one: **decide what the authoritative store
+is first, and read that.**
 
 ### Waking is automatic (0.4.6)
 
