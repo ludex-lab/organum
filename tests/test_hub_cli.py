@@ -688,3 +688,51 @@ def test_list는_tofu와_소개받은_서명자를_구분해_보여준다(capsys
     c_rows = [l for l in lines if "lab:c" in l]
     assert a_rows and all("self" in l for l in a_rows)          # 운영 lab = 자기 자신
     assert c_rows and all("introduced@" in l for l in c_rows)   # 보증받은 서명자
+
+
+def test_admit는_등록_signer의_pubkey를_registry에서_파생한다(capsys, ws):
+    """[0.4.8 실사고] 운영자가 축약 지문에서 키를 재구성해 넘겨 여섯 봉투가 서명 실패로
+    떨어졌다 — 앞뒤 자리만 맞고 가운데가 허구였다. registry가 (signer,key_id,epoch)
+    결속을 이미 쥐고 있으므로: ①등록 signer는 --pubkey 생략 가능 ②잘못된 키는 서명
+    검증 전에 'registry 결속과 다르다'로 이름 붙어 떨어진다 ③미등록 signer는 여전히
+    명시적 키를 요구한다(첫인상은 결정이어야 한다)."""
+    _setup(capsys, ws)
+    env = {"envelope_schema": he.ENVELOPE_SCHEMA, "event_kind": "message.read",
+           "signer": {"id": "lab:b", "key_id": "k1", "key_epoch": 1},
+           "subject": {"type": "run", "id": "run:d-1"},
+           "provenance": {"lab": "lab:b", "machine": "m-b", "platform": "linux",
+                          "adapter": "t/1.0", "cli_version": None, "capture": None},
+           "idempotency_key": "b-derive-1", "created_at": "2026-08-22T01:00:00Z",
+           "payload": {"cursor": "c-1"}}
+    Path("d.json").write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
+    rc, sig = run(capsys, "sign", "--key", "lab-b.seed", "--envelope", "d.json")
+    # ① pubkey 생략 → registry 파생으로 admit 성공
+    rc, out = run(capsys, "admit", "--dir", "hub", "--envelope", "d.json",
+                  "--sig", sig["sig"])
+    assert rc == 0 and out["admitted"] is True
+    # ② 가운데가 허구인 그럴듯한 키 → 서명 단계가 아니라 registry 대조에서 이름 붙어 실패
+    fake = sig["pubkey"][:8] + "0" * 52 + sig["pubkey"][-4:]
+    env["idempotency_key"] = "b-derive-2"
+    Path("d.json").write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
+    rc, sig2 = run(capsys, "sign", "--key", "lab-b.seed", "--envelope", "d.json")
+    try:
+        rc2 = cli.main(["admit", "--dir", "hub", "--envelope", "d.json",
+                        "--sig", sig2["sig"], "--pubkey", fake])
+    except SystemExit as e:
+        rc2 = e.code
+    cap = capsys.readouterr()
+    assert rc2 == 2 and "registry 결속과 다르다" in cap.err
+    # ③ 미등록 signer + 생략 → 명시적 키 요구
+    _, c = run(capsys, "keygen", "lab-x")
+    env_x = dict(env, signer={"id": "lab:x", "key_id": "k1", "key_epoch": 1},
+                 idempotency_key="x-derive-1",
+                 provenance=dict(env["provenance"], lab="lab:x"))
+    Path("x.json").write_text(json.dumps(env_x, ensure_ascii=False), encoding="utf-8")
+    rc, sigx = run(capsys, "sign", "--key", "lab-x.seed", "--envelope", "x.json")
+    try:
+        rcx = cli.main(["admit", "--dir", "hub", "--envelope", "x.json",
+                        "--sig", sigx["sig"]])
+    except SystemExit as e:
+        rcx = e.code
+    cap = capsys.readouterr()
+    assert rcx == 2 and "registry에 결속이 없다" in cap.err

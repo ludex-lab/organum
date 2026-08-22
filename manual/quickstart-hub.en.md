@@ -178,6 +178,19 @@ point is that a peer's address is the pair **(URL, pubkey)** — the pubkey is
 the identity and the URL is mere routing, so you can swap carriers without
 touching identity or verification.
 
+### admit derives a registered signer's key from the ledger (0.4.8)
+
+When admitting an envelope from a registered signer, omitting `--pubkey` is the safe
+default — the registry already binds (signer, key_id, epoch) to a pubkey, so admit
+derives it. If you do pass a key, it is checked against the registry first, and a
+mismatch fails **before** signature verification with an error that names the problem.
+This came from a real incident: an operator reconstructed a full key from an abbreviated
+fingerprint (`76b22ede…c51c` style) — only the leading and trailing characters were
+right, the middle was invented — and six envelopes fell as unexplained signature
+failures. **Identity material comes from the ledger, not from memory or prose.**
+Unregistered signers still require an explicit key: a first impression (TOFU) should be
+a decision, not a default.
+
 ### The ledger shows how each signer got in (0.4.7)
 
 `organum-hub list` prints, next to each event, **how that signer entered this hub**:

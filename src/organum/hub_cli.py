@@ -287,6 +287,25 @@ def cmd_sign(a):
     return 0
 
 
+def _registry_pubkey_for(hub, signer) -> str | None:
+    """봉투가 선언한 signer 좌표 (id, key_id, epoch)에 registry가 결속한 pubkey.
+
+    (signer,key_id,epoch) tuple 유일 불변식이 있으므로 있으면 정확히 하나다. 0.4.8
+    (실사고): 운영자가 축약 지문("76b22ede…c51c")에서 키를 재구성해 넘겼고 — 앞 8자와
+    끝 4자만 맞고 가운데 48자가 허구였다 — 여섯 봉투가 "outer 서명 검증 실패"로 떨어져
+    원인 규명에 다섯 단계가 걸렸다. registry가 이미 결속을 쥐고 있는데 사람이 키를
+    다시 치게 하는 설계가 이 사고를 만든다: 등록 signer는 registry에서 파생하고,
+    사람이 준 값은 대조해서 **불일치를 서명 검증 전에 이름으로** 알린다."""
+    if not isinstance(signer, dict):
+        return None
+    for b in hub.keys.bindings_of(signer.get("id") or ""):
+        if (b["key_id"] == signer.get("key_id")
+                and b["key_epoch"] == signer.get("key_epoch")
+                and b["revoked_at_seq"] is None):
+            return b["pubkey"]
+    return None
+
+
 def cmd_admit(a):
     d, cfg, hub = _load(a.dir, receipt_seckey=_read_seed(a.receipt_key)
                         if a.receipt_key else None)
@@ -294,6 +313,20 @@ def cmd_admit(a):
         raise HubCliError("--sig 또는 --sig-file 중 하나만")
     sig = a.sig or Path(a.sig_file).read_text(encoding="utf-8").strip()
     env = json.loads(Path(a.envelope).read_text(encoding="utf-8"))
+    reg_pub = _registry_pubkey_for(hub, env.get("signer"))
+    if a.pubkey is None:
+        if reg_pub is None:
+            raise HubCliError(
+                "--pubkey 필요 — 이 signer 좌표는 registry에 결속이 없다. "
+                "첫인상(TOFU) admit은 키를 명시적으로 건네는 것이 맞다")
+        pubkey = reg_pub
+    else:
+        if reg_pub is not None and a.pubkey != reg_pub:
+            raise HubCliError(
+                f"제공한 pubkey가 registry 결속과 다르다 — "
+                f"registry {reg_pub[:16]}…, 제공 {a.pubkey[:16]}…. "
+                "등록 signer는 --pubkey 생략이 안전하다(registry에서 파생)")
+        pubkey = a.pubkey
     # 0.4.5(비수신자 admit 실사고 3건): addressed 봉투의 target lab이 이 hub의 운영
     # lab과 다르면 기본 거부 — 회람 증인 admit은 --accept-foreign-target으로 **명시**
     # 한다(admit=증인, 재판정=별도 행위 관례). 판정은 CLI 층이다: 봉투 층은 witness
@@ -317,7 +350,7 @@ def cmd_admit(a):
             raise HubCliError(
                 f"수신자가 아니다 — target {tgt['lab_id']}, 이 hub 운영 lab {own}. "
                 "회람 증인으로 수용하려면 --accept-foreign-target을 명시하세요")
-    return _print_result(_admit_and_log(d, hub, he.canonical_bytes(env), sig, a.pubkey))
+    return _print_result(_admit_and_log(d, hub, he.canonical_bytes(env), sig, pubkey))
 
 
 def cmd_verify_envelope(a):
@@ -641,7 +674,7 @@ def main(argv=None) -> int:
                               ("--envelope", {"required": True}),
                               ("--sig", {"default": None}),
                               ("--sig-file", {"default": None}),
-                              ("--pubkey", {"required": True}),
+                              ("--pubkey", {"default": None}),
                               ("--receipt-key", {"default": None}),
                               ("--accept-foreign-target",
                                {"action": "store_true"})]),
