@@ -199,6 +199,30 @@ want to check, without touching the ledger" is exactly the moment it is easiest 
 pull identity material out of memory**, so the ledger is wired to that spot. A
 read-only replay is not touching the ledger.
 
+### Past envelopes audit from the ledger too (0.4.13)
+
+`verify-envelope --dir` verifies envelopes signed by keys that have since been
+**rotated or revoked**, pulling that key from the registry. It reports two
+things side by side:
+
+- `valid_signature` — the **cryptographic fact**: did this key sign these bytes
+- `key_valid_from_seq` / `key_revoked_at_seq` — the **authority judgement**: from
+  when was that key valid in this hub, and when was it revoked
+
+An envelope carries no acceptance coordinate, so this does not claim "it was
+authority-valid at the time". Keeping the two side by side rather than merged is
+the honest shape. The exit code reflects only the first group (signature, schema,
+body digest) — a past envelope from a revoked key still has a true signature.
+
+`admit` does the opposite: it accepts only the **currently active** key, because
+a *new* envelope signed by a revoked key must not get in. One registry, two
+different questions.
+
+0.4.12 missed this separation. It reused the active-key predicate on the audit
+path, so auditing a past envelope from any lab that had rotated once failed with
+"no binding" — which pushes the auditor back to typing keys by hand, the very
+accident 0.4.12 existed to prevent. A partner lab caught it with a counterexample.
+
 ### Send through your own door only (0.4.10)
 
 `from-x` is **the door x writes through**. To let the other houses read something,

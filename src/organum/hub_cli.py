@@ -295,14 +295,34 @@ def _registry_pubkey_for(hub, signer) -> str | None:
     끝 4자만 맞고 가운데 48자가 허구였다 — 여섯 봉투가 "outer 서명 검증 실패"로 떨어져
     원인 규명에 다섯 단계가 걸렸다. registry가 이미 결속을 쥐고 있는데 사람이 키를
     다시 치게 하는 설계가 이 사고를 만든다: 등록 signer는 registry에서 파생하고,
-    사람이 준 값은 대조해서 **불일치를 서명 검증 전에 이름으로** 알린다."""
+    사람이 준 값은 대조해서 **불일치를 서명 검증 전에 이름으로** 알린다.
+
+    이 술어는 **현재 활성 키**만 본다(admit 전용) — 폐기된 키로 서명된 새 봉투를
+    받아들이면 안 되기 때문이다. 과거 봉투 감사는 다른 질문이므로
+    `_registry_binding_for_audit`을 쓴다(0.4.13, Orin 024 반례)."""
+    b = _registry_binding_for_audit(hub, signer)
+    return b["pubkey"] if b is not None and b["revoked_at_seq"] is None else None
+
+
+def _registry_binding_for_audit(hub, signer) -> dict | None:
+    """봉투 signer 좌표의 **exact 결속** — 폐기 여부와 무관하게 돌려준다.
+
+    0.4.13(Orin 024 반례, 우리 손으로 재현): 0.4.12가 `verify-envelope --dir`에
+    admit용 활성키 술어를 그대로 재사용해, **회전·폐기를 지난 과거 봉투를 감사하면
+    "결속이 없다"**로 떨어졌다. registry에는 그 결속이 pubkey·`valid_from_seq`·
+    `revoked_at_seq`까지 멀쩡히 남아 있는데도. 그 결과 감사자는 과거 봉투에 대해
+    다시 손으로 키를 치게 되고 — **그것이 0.4.12가 막으려던 사고 자체다.**
+
+    두 판정은 다른 질문이다: `valid_signature`는 **암호적 사실**(이 bytes를 이 키가
+    서명했는가)이고, 키 lifecycle은 **authority 판정**이다. 봉투에는 accepted_seq가
+    없어 "그때 authority-valid였다"까지는 주장할 수 없으므로, 섞지 않고 나란히
+    보여 준다(호출자가 `key_valid_from_seq`·`key_revoked_at_seq`로 읽는다)."""
     if not isinstance(signer, dict):
         return None
     for b in hub.keys.bindings_of(signer.get("id") or ""):
         if (b["key_id"] == signer.get("key_id")
-                and b["key_epoch"] == signer.get("key_epoch")
-                and b["revoked_at_seq"] is None):
-            return b["pubkey"]
+                and b["key_epoch"] == signer.get("key_epoch")):
+            return b
     return None
 
 
@@ -372,9 +392,14 @@ def cmd_verify_envelope(a):
     env = json.loads(Path(a.envelope).read_text(encoding="utf-8"))
     raw = he.canonical_bytes(env)
     pubkey = a.pubkey
+    lifecycle: dict = {"key_valid_from_seq": None, "key_revoked_at_seq": None}
     if a.dir:
         _, _, hub = _load(a.dir)                       # 읽기 전용 replay
-        reg_pub = _registry_pubkey_for(hub, env.get("signer"))
+        binding = _registry_binding_for_audit(hub, env.get("signer"))
+        reg_pub = binding["pubkey"] if binding else None
+        if binding is not None:
+            lifecycle = {"key_valid_from_seq": binding["valid_from_seq"],
+                         "key_revoked_at_seq": binding["revoked_at_seq"]}
         if reg_pub is None:
             if not pubkey:
                 raise HubCliError(
@@ -407,8 +432,11 @@ def cmd_verify_envelope(a):
                       if env.get("event_kind") in he.ADDRESSED_KINDS else None),
            "schema_problems": he.validate_envelope(env),
            "body_sha256_match": body_match,
+           **lifecycle,
            "ledger_touched": False}
     print(json.dumps(out, ensure_ascii=False, indent=1))
+    # 종료코드는 **암호적 사실 + 봉투 무결성**만 본다. 폐기된 키의 과거 봉투도
+    # 서명은 참이므로 0이다 — lifecycle은 별도 필드로 읽는다(0.4.13, 판정 분리).
     return 0 if (sig_ok and not out["schema_problems"]
                  and body_match in (None, True)) else 1
 

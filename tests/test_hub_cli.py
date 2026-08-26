@@ -656,6 +656,52 @@ def test_verify_envelope가_키를_장부에서_꺼낸다(capsys, ws):
     assert rc == 2
 
 
+def test_회전_폐기를_지난_과거_봉투도_장부에서_감사된다(capsys, ws):
+    """[0.4.13 — Orin 024 반례, 우리 손으로 재현] 0.4.12가 `verify-envelope --dir`에
+    **admit용 활성키 술어**를 그대로 재사용해, 회전·폐기를 지난 과거 봉투 감사가
+    "결속이 없다"로 떨어졌다. registry엔 그 결속이 pubkey·좌표까지 남아 있는데도.
+    그러면 감사자는 과거 봉투에 대해 다시 손으로 키를 치게 되고 — **그게 0.4.12가
+    막으려던 사고 자체다.**
+
+    두 판정은 다른 질문이다: `valid_signature`=암호적 사실 / lifecycle=authority.
+    섞지 않고 나란히 보여 준다. admit은 활성키 규칙을 그대로 유지한다."""
+    a_pub, b_pub, _ = _setup(capsys, ws)              # hub=lab:a/hub, lab:b k1/e1 등록
+    body = b"past envelope"
+    Path("p-body.md").write_bytes(body)
+    env = _msg_env("lab:b", "lab:a", body)
+    Path("p.json").write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
+    rc, s = run(capsys, "sign", "--key", "lab-b.seed", "--envelope", "p.json")
+
+    rc, r = run(capsys, "verify-envelope", "--envelope", "p.json",
+                "--sig", s["sig"], "--dir", "hub", "--body", "p-body.md")
+    assert rc == 0 and r["valid_signature"] is True
+    assert r["key_revoked_at_seq"] is None            # 아직 활성
+
+    # 회전 + 폐기 — 그 뒤 같은 과거 봉투를 감사한다
+    rc, k2 = run(capsys, "keygen", "lab-b2")
+    run(capsys, "rotate-key", "--dir", "hub", "--key", "lab-b.seed",
+        "--signer", "lab:b", "--key-id", "k1", "--epoch", "1",
+        "--new-key-id", "k2", "--new-epoch", "2", "--new-pubkey", k2["pubkey"])
+    run(capsys, "revoke-key", "--dir", "hub", "--key", "lab-b2.seed",
+        "--signer", "lab:b", "--key-id", "k2", "--epoch", "2",
+        "--revoke-key-id", "k1", "--revoke-epoch", "1")
+
+    rc, r = run(capsys, "verify-envelope", "--envelope", "p.json",
+                "--sig", s["sig"], "--dir", "hub", "--body", "p-body.md")
+    assert rc == 0, "폐기된 키의 과거 봉투도 서명은 참이다 — 손입력을 요구하면 안 된다"
+    assert r["valid_signature"] is True               # 암호적 사실
+    assert r["key_revoked_at_seq"] is not None        # authority는 별도로 보인다
+    assert r["ledger_touched"] is False
+
+    # admit은 활성키 규칙 유지 — 폐기된 키로 서명된 봉투를 새로 받지 않는다
+    env2 = _msg_env("lab:b", "lab:a", b"new one")
+    Path("n.json").write_text(json.dumps(env2, ensure_ascii=False), encoding="utf-8")
+    rc, s2 = run(capsys, "sign", "--key", "lab-b.seed", "--envelope", "n.json")
+    rc, _ = run(capsys, "admit", "--dir", "hub", "--envelope", "n.json",
+                "--sig", s2["sig"])
+    assert rc == 2                                    # 파생 실패 → 명시 요구/거부
+
+
 def test_admit_비수신자_기본_거부_회람은_명시_플래그(capsys, ws):
     """[0.4.5 실사고 3건] addressed 봉투의 target lab ≠ 운영 lab이면 기본 거부 +
     로그 무전이; --accept-foreign-target 명시 시에만 회람 증인으로 수용."""
