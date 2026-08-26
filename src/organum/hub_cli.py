@@ -11,7 +11,7 @@
     organum-hub admit --dir hub --envelope their.json --sig … --pubkey …   # 상대 봉투
     organum-hub prove --dir hub --event-id …      # 포함 증명 → verify-proof로 오프라인 검증
     organum-hub rotate-key / revoke-key / was-valid                        # key lifecycle
-    organum-hub serve / push / pull               # git 없는 전달 — HTTP 우체통(drop v0)
+    organum-hub serve / push / pull / channels    # git 없는 전달 — HTTP 우체통(drop v0)
 
 ## 상태 모델 — 로그가 곧 상태다
 
@@ -355,17 +355,43 @@ def cmd_admit(a):
 
 def cmd_verify_envelope(a):
     """장부 무접촉 검증(0.4.5, LxM 제안) — "검증하고 싶었을 뿐인데 장부에 남기는 것
-    말고는 길이 없었다"의 해소. hub 디렉터리를 받지 않는다: 서명·event_id·스키마
-    shape·(옵션) body digest·target 표시만. registry/정책/로그는 건드리지도 필요하지도
-    않다 — TOFU 교차 확인·회람 게이트 검증의 표준 도구."""
+    말고는 길이 없었다"의 해소. 서명·event_id·스키마 shape·(옵션) body digest·
+    target 표시만 보고, **로그를 전진시키지 않는다**(`ledger_touched: false`).
+
+    0.4.12 — `--dir`로 키를 장부에서 꺼낸다: 0.4.8이 `admit`의 손입력 키를 없앴는데
+    이 도구는 `--pubkey`를 **필수**로 남겨 뒀다. 그래서 "장부를 안 건드리고 확인만"
+    하려던 사람이 정확히 그 순간 신원 재료를 산문이나 기억에서 꺼내게 된다 — 저자인
+    내가 0.4.8 출하 나흘 뒤 같은 사고를 반복했다(축약 지문 `76b22ede…c51c`에서
+    가운데 48자를 지어냈고, 유효한 봉투 두 통이 서명 실패로 떨어졌다).
+    **읽기 전용 replay는 장부 접촉이 아니다**: `--dir`을 주면 registry 결속에서
+    파생하고, `--pubkey`를 함께 주면 대조해 다르면 검증 **전에** 알린다(admit과
+    같은 술어). hub 없는 첫인상(TOFU) 확인은 종전대로 `--pubkey` 단독으로 쓴다."""
     if bool(a.sig) == bool(a.sig_file):
         raise HubCliError("--sig 또는 --sig-file 중 하나만")
     sig = a.sig or Path(a.sig_file).read_text(encoding="utf-8").strip()
     env = json.loads(Path(a.envelope).read_text(encoding="utf-8"))
     raw = he.canonical_bytes(env)
+    pubkey = a.pubkey
+    if a.dir:
+        _, _, hub = _load(a.dir)                       # 읽기 전용 replay
+        reg_pub = _registry_pubkey_for(hub, env.get("signer"))
+        if reg_pub is None:
+            if not pubkey:
+                raise HubCliError(
+                    "이 signer 좌표는 --dir의 registry에 결속이 없다 — 첫인상(TOFU) "
+                    "확인이면 --pubkey를 명시하세요(결정이어야 하니까)")
+        elif pubkey and pubkey != reg_pub:
+            raise HubCliError(
+                f"제공한 pubkey가 registry 결속과 다르다 — "
+                f"registry {reg_pub[:16]}…, 제공 {pubkey[:16]}…. "
+                "등록 signer는 --pubkey 생략이 안전하다(장부에서 파생)")
+        else:
+            pubkey = reg_pub
+    elif not pubkey:
+        raise HubCliError("--pubkey 또는 --dir 중 하나는 필요하다")
     try:
         sig_ok = sp.verify(bytes.fromhex(sig), hashlib.sha256(raw).digest(),
-                           bytes.fromhex(a.pubkey))
+                           bytes.fromhex(pubkey))
     except (ValueError, TypeError):
         sig_ok = False
     body_match = None
@@ -593,7 +619,8 @@ def cmd_push(a):
     token = hd.load_tokens(a.token_file)[0]
     st: dict = {}
     try:
-        r = hd.push_quad(a.url, token, a.quad, timeout=a.timeout, stats=st)
+        r = hd.push_quad(a.url, token, a.quad, timeout=a.timeout, stats=st,
+                         allow_foreign_door=a.accept_foreign_door)
     except (ValueError, hd.DropError) as e:
         raise HubCliError(str(e))
     print(json.dumps({**r, **st}, ensure_ascii=False))
@@ -610,6 +637,18 @@ def cmd_pull(a):
         raise HubCliError(str(e))
     print(json.dumps({"pulled": ns, "dest": str(Path(a.dest)), **st},
                      ensure_ascii=False))
+    return 0
+
+
+def cmd_channels(a):
+    """서버의 channel/sender 트리 — 수거 목록을 기억이 아니라 서버에 묻는다(0.4.9)."""
+    token = hd.load_tokens(a.token_file)[0]
+    st: dict = {}
+    try:
+        r = hd.list_channels(a.url, token, timeout=a.timeout, stats=st)
+    except (ValueError, hd.DropError) as e:
+        raise HubCliError(str(e))
+    print(json.dumps({**r, **st}, ensure_ascii=False))
     return 0
 
 
@@ -682,7 +721,8 @@ def main(argv=None) -> int:
          [("--envelope", {"required": True}),
           ("--sig", {"default": None}),
           ("--sig-file", {"default": None}),
-          ("--pubkey", {"required": True}),
+          ("--pubkey", {"default": None}),
+          ("--dir", {"default": None}),
           ("--body", {"default": None})]),
         ("export", cmd_export, [("--dir", {"required": True}),
                                 ("--out", {"required": True}),
@@ -700,7 +740,9 @@ def main(argv=None) -> int:
                             ("--token-file", {"required": True}),
                             ("--timeout",
                              {"type": int,
-                              "default": hd.CLIENT_TIMEOUT_SECONDS})]),
+                              "default": hd.CLIENT_TIMEOUT_SECONDS}),
+                            ("--accept-foreign-door",
+                             {"action": "store_true"})]),
         ("pull", cmd_pull, [("--url", {"required": True}),
                             ("--dest", {"required": True}),
                             ("--token-file", {"required": True}),
@@ -708,6 +750,11 @@ def main(argv=None) -> int:
                             ("--timeout",
                              {"type": int,
                               "default": hd.CLIENT_TIMEOUT_SECONDS})]),
+        ("channels", cmd_channels, [("--url", {"required": True}),
+                                    ("--token-file", {"required": True}),
+                                    ("--timeout",
+                                     {"type": int,
+                                      "default": hd.CLIENT_TIMEOUT_SECONDS})]),
         ("rotate-key", cmd_rotate_key, [("--dir", {"required": True}),
                                         ("--key", {"required": True}),
                                         ("--signer", {"required": True}),

@@ -1,0 +1,10 @@
+# 벤더링한 벡터/스냅샷은 **바이트 그대로** 보존한다.
+#
+# 왜: 이 파일들은 content SHA로 결속돼 있고(tests/vectors/PIN.md), 그 SHA가
+# 우리 암호 검증이 옳다고 말하는 근거다. git의 줄바꿈 정규화(text=auto)는
+# CRLF를 LF로 바꾸면서 **바이트를 바꾸고 따라서 SHA를 바꾼다** — 작업본에서는
+# 통과하는데 클린 체크아웃(git archive·fresh clone)에서만 pin이 깨진다.
+# 2026-08-26 BIP-340 벡터를 벤더링하다 실제로 밟았다: 작업본 34c9d1d9…,
+# git archive 01c8cabb…. 클린 재현 규율이 아니었으면 다른 집에서 터졌을 것이다.
+tests/vectors/** -text
+docs/catalog-sources/** -text

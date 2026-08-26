@@ -178,6 +178,79 @@ point is that a peer's address is the pair **(URL, pubkey)** — the pubkey is
 the identity and the URL is mere routing, so you can swap carriers without
 touching identity or verification.
 
+### Take the verifying key from the ledger too (0.4.12)
+
+Pass `--dir` to `verify-envelope` and the public key is **derived from the registry
+binding** — nothing to type by hand. The ledger is still untouched
+(`ledger_touched: false`, no log advance). For a first-impression (TOFU) check
+with no hub, keep passing `--pubkey` explicitly.
+
+```bash
+organum-hub verify-envelope --envelope 043-envelope.json --sig-file 043-sig.txt \
+    --dir hub --body 043-body.md      # key comes from the ledger
+```
+
+This hole should have closed in 0.4.8, when `admit` stopped accepting hand-typed
+keys. The author paid for leaving it open four days later: reconstructing the
+middle 48 characters of an abbreviated fingerprint (`76b22ede…c51c`) from memory,
+dropping two perfectly valid envelopes as signature failures — and nearly
+suspecting a neighbour's good envelope of forgery. **The moment you decide "I only
+want to check, without touching the ledger" is exactly the moment it is easiest to
+pull identity material out of memory**, so the ledger is wired to that spot. A
+read-only replay is not touching the ledger.
+
+### Send through your own door only (0.4.10)
+
+`from-x` is **the door x writes through**. To let the other houses read something,
+post it to your own door — each of them pulls from there with their own collector.
+There is no need to write to someone else's door, and you must not.
+
+The server does **not** stop you. The drop is a dumb carrier: it neither opens the
+envelope nor checks whether the signer matches the door name. That is a designed
+property and a good one — the moment a carrier starts adjudicating senders, you
+have one more thing to trust. Instead, **the client refuses by default**:
+
+```bash
+organum-hub push --url http://HOST:8642/v0/hub-ops/from-ludex --quad out/037 …
+# refuses: URL door from-ludex, but this envelope is signed by lab:organum (own door from-organum).
+```
+
+This gate came out of a real incident. A lab operator (me) followed a list of URLs
+in a task brief literally and POSTed his own signed envelope into two other labs'
+sender doors. The server accepted them exactly as specified, and the drop is
+append-only, so **it could not be withdrawn** — those two slot numbers are
+permanently held by an envelope from the wrong sender, and the rightful owners
+have to skip to the next number. The third door happened to have that number
+already taken, so it returned 409, and that accident stopped the incident at two.
+
+The lesson is one line: **knowing the server won't stop you is not the same as
+being allowed to.** Discipline was holding that gap, and discipline collapses with
+a single lapse — so it moved into the machine. If a relayed delivery really is
+what you intend, `--accept-foreign-door` makes it **explicit**, so it is a
+decision rather than a slip.
+
+### Ask the server for the list of doors (0.4.9)
+
+```bash
+organum-hub channels --url http://HOST:8642/v0/channels --token-file tokens.txt
+# {"channels": {"hub-ops": ["from-ludex", "from-ray"], …}, "warm_ms": …}
+```
+
+Which channels and which doors (`from-x`) a collector should watch is something
+only the server knows — and until now, nobody could ask. Every lab carried the
+list from memory. True story: one lab's collector ran faithfully at every anchor
+while watching **two of four doors**, and 48 envelopes went unread. The lab's
+post-mortem sentence: "a receipt says collection happened; it never said the
+round was complete." This call is the cross-path for that disease — a collector
+that checks its own list against the server's tree at the start of each round
+can no longer miss a newly opened channel.
+
+One honest property: **only doors that have received a POST are visible** (the
+directory is created at that moment). It is a list of doors that exist, not
+channels that were promised — which is exactly the meaning a collector needs.
+Token holders only; costs 1 unit of rate-limit budget — one call per round, so
+negligible, but not free.
+
 ### admit derives a registered signer's key from the ledger (0.4.8)
 
 When admitting an envelope from a registered signer, omitting `--pubkey` is the safe

@@ -24,7 +24,16 @@ transport_root 스왑만으로 무변경 동작한다.
   "body_b64"]} → 200 {"n","stored","dedup"} · 409(같은 n 다른 내용) · 400/401/413
 - `GET  /v0/<channel>/<from-x>?since=NNN` → 200 {"quads":[…], "more"} (n 오름차순,
   페이지 20; envelope가 마지막에 쓰이므로 미완성 quad는 목록에 나오지 않는다)
+- `GET  /v0/channels` → 200 {"channels": {"<channel>": ["from-x", …], …}} —
+  수거기의 문 목록(0.4.9). "채널이 몇 개 있는가"는 서버만 아는데 아무도 물을 수
+  없었고, 각 랩이 목록을 기억으로 들다 한 랩이 네 문 중 두 문만 보는 사고가 났다.
+  토큰 소지자 전용(예산 1 소비). 정확히 2세그먼트 경로만 예약이라 `channels`라는
+  이름의 채널과도 충돌하지 않는다(그 채널의 문은 여전히 3세그먼트).
 - 인증: `Authorization: Bearer <token>` (토큰 파일 한 줄 하나, `#` 주석)
+- **발신 규약: 자기 문에만 쓴다** — `from-x`는 x가 쓰는 문이고, 다른 집이 읽게
+  하려면 자기 문에 올리면 된다(각자 pull한다). 서버는 이걸 **막지 않는다**
+  (dumb carrier가 발신자를 판정하기 시작하면 그게 더 나쁘다) — 대신 클라이언트가
+  기본 거부한다(0.4.10 `_check_door`, 실사고 산물).
 - 토큰(=멤버)별 rate limit: 초과는 429 + `Retry-After` 초. hosted(gated) 티어의
   비용 유계 조건 — 인증 실패(401)는 멤버가 아니므로 예산을 먹지 않고, 인증 전
   플러드 방어는 배치 층(에지/방화벽) 몫이다.
@@ -43,6 +52,7 @@ import math
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -169,6 +179,26 @@ def _validate_bundle(obj) -> tuple[str, bytes, str, str | None, bytes | None]:
     return n, env_b, sig, body_name, body_b
 
 
+def _channel_tree(root: Path) -> dict[str, list[str]]:
+    """channel/sender 트리 — root 디렉터리 열거를 POST와 같은 문법 필터로 거른다.
+
+    정직한 성질 하나: **첫 봉투가 POST된 문만 보인다**(디렉터리가 그때 생기므로).
+    수거기 용도로는 그게 정확히 맞는 의미다 — 약속된 채널이 아니라 실재하는 문.
+    문이 하나도 없는 채널은 목록에 없다(POST 경로로는 만들어질 수 없는 모양이라,
+    있다면 손이 만든 잔재다)."""
+    tree: dict[str, list[str]] = {}
+    if not root.is_dir():
+        return tree
+    for ch in sorted(root.iterdir()):
+        if not (ch.is_dir() and _CHANNEL_RE.match(ch.name)):
+            continue
+        doors = sorted(d.name for d in ch.iterdir()
+                       if d.is_dir() and _SENDER_RE.match(d.name))
+        if doors:
+            tree[ch.name] = doors
+    return tree
+
+
 def _split_path(path: str) -> tuple[str, str] | None:
     parts = [p for p in path.split("/") if p]
     if len(parts) != 3 or parts[0] != "v0":
@@ -195,8 +225,11 @@ class _DropHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _gate(self) -> tuple[str, str] | None:
-        """인증 → rate limit → 경로 순. 실패 시 응답까지 보내고 None."""
+    def _auth(self) -> str | None:
+        """인증 → rate limit. 실패 시 응답까지 보내고 None, 통과면 토큰.
+
+        순서가 계약이다: 인증 실패(401)는 limiter 호출 **전**에 반환 — 멤버가
+        아니면 예산을 먹지 않는다(무인증 워밍 GET이 공짜인 근거, 0.4.6)."""
         token = _token_match(self.tokens, self.headers.get("Authorization"))
         if token is None:
             self._send(401, {"error": "bearer 토큰 필요"})
@@ -206,6 +239,12 @@ class _DropHandler(BaseHTTPRequestHandler):
             self._send(429, {"error": f"rate limit — {retry}초 뒤에"},
                        headers={"Retry-After": str(retry)})
             return None
+        return token
+
+    def _gate(self) -> tuple[str, str] | None:
+        """인증 → rate limit → 경로 순. 실패 시 응답까지 보내고 None."""
+        if self._auth() is None:
+            return None
         path = self.path.split("?", 1)[0]
         loc = _split_path(path)
         if loc is None:
@@ -214,6 +253,11 @@ class _DropHandler(BaseHTTPRequestHandler):
         return loc
 
     def do_GET(self):  # noqa: N802 — BaseHTTPRequestHandler 계약
+        if self.path.split("?", 1)[0] == "/v0/channels":
+            if self._auth() is None:
+                return
+            self._send(200, {"channels": _channel_tree(self.root)})
+            return
         loc = self._gate()
         if loc is None:
             return
@@ -346,13 +390,15 @@ def _request(url: str, token: str, data: bytes | None = None,
 
 def push_quad(url: str, token: str, quad_prefix: str | Path,
               timeout: int = CLIENT_TIMEOUT_SECONDS, warmup: bool = True,
-              stats: dict | None = None) -> dict:
+              stats: dict | None = None,
+              allow_foreign_door: bool = False) -> dict:
     """export가 만든 quad(`<dir>/NNN` 접두)를 POST. 같은 내용 재전송은 dedup 수렴.
+
+    발신 문 게이트(0.4.10, `_check_door`)가 **네트워크 접촉 전에** 돈다 — 자기 문이
+    아니면 아무것도 보내지 않고 거부한다. 정당한 대리 전달은 `allow_foreign_door`.
 
     `stats` dict를 주면 워밍 계측(`warm_ms`·`warm_ok`)을 채워 준다 — 반환 모양은
     안 바꾼다(교차 랩 소비 계약 보존)."""
-    if warmup:
-        _warm_measured(url, stats)
     prefix = Path(quad_prefix)
     n = prefix.name
     if not _N_RE.match(n):
@@ -361,6 +407,9 @@ def push_quad(url: str, token: str, quad_prefix: str | Path,
     sig_p = prefix.parent / f"{n}-sig.txt"
     if not (env_p.is_file() and sig_p.is_file()):
         raise ValueError(f"quad 불완전: {env_p.name} / {sig_p.name} 필요")
+    _check_door(url, env_p.read_bytes(), allow_foreign_door)
+    if warmup:
+        _warm_measured(url, stats)
     bundle = {"n": n,
               "envelope_b64": base64.b64encode(env_p.read_bytes()).decode("ascii"),
               "sig": sig_p.read_text(encoding="utf-8").strip(),
@@ -370,6 +419,81 @@ def push_quad(url: str, token: str, quad_prefix: str | Path,
         bundle["body_name"] = bodies[0].name[len(n) + 1:]
         bundle["body_b64"] = base64.b64encode(bodies[0].read_bytes()).decode("ascii")
     return _request(url, token, json.dumps(bundle).encode("utf-8"), timeout=timeout)
+
+
+def _door_for_signer(signer_id) -> str | None:
+    """봉투 서명자 → 그가 쓸 수 있는 문 이름. 파생 불가면 None(호출자가 fail-closed).
+
+    문법은 결정적이다: 봉투 스키마의 signer.id는 `lab:<name>` 고정이므로
+    `lab:x` → `from-x`. 다만 lab 문법(`.`·`_` 허용)이 sender 문법(`-`만)보다
+    넓어서 파생 결과가 문 이름이 못 되는 경우가 있다 — 그때는 추측하지 않고
+    None을 돌려준다(r3 교훈: 파생이 안 서는 자리는 fail-closed)."""
+    if not isinstance(signer_id, str) or not signer_id.startswith("lab:"):
+        return None
+    door = f"from-{signer_id[len('lab:'):]}"
+    return door if _SENDER_RE.fullmatch(door) else None
+
+
+def _check_door(url: str, env_b: bytes, allow_foreign_door: bool) -> None:
+    """**발신 문 게이트**(0.4.10) — 자기 문에만 쓴다. 실사고에서 나왔다.
+
+    2026-08-26, 나는 우리 서명 봉투를 `from-ludex`·`from-ray`에 POST했다. 서버는
+    dumb carrier라 막지 않았고(설계된 성질이고 좋은 성질이다), append-only라
+    철회도 못 했다. 세 번째 문이 409로 막힌 것이 사고를 두 자리에서 멈춰 세웠다.
+    **서버가 막지 않는다는 것과 해도 된다는 것은 다르다** — 그 사이를 규율이
+    메우고 있었고, 규율은 한 번의 착각으로 무너진다. 그래서 기계로 옮긴다.
+
+    층위(0.4.5 admit 게이트와 같은 자리): **서버가 아니라 클라이언트**다. carrier가
+    발신자를 판정하기 시작하면 그게 더 나쁘다. 그리고 라이브러리 본체에 둔다
+    (_warm과 같은 논리, Ludex 010): 클라마다 구현하면 누군가는 빼먹는다.
+
+    **축을 혼동하지 말 것**: 이 게이트는 *전송로의 문*을 본다. 0.4.5의
+    `--accept-foreign-target`은 *봉투의 수신자*를 본다. 다른 축이고, 발신이 타 lab을
+    target하는 것은 여전히 본래 목적이다(그 경계는 옮기지 말 것).
+
+    성공 조건을 명시-나열한다(fail-open 3연발의 교훈 — 게이트는 열거형으로만):
+    ① URL이 `/v0/<channel>/<from-x>`로 파싱된다 ② 봉투가 JSON으로 읽힌다
+    ③ signer.id에서 문 이름이 파생된다 ④ 파생한 문 == URL의 문. 넷 다 참일 때만
+    통과하고, 그 밖은 전부 거부다. 정당한 대리 전달은 `allow_foreign_door`로
+    **명시**한다 — 실수가 아니라 결정이 되도록."""
+    if allow_foreign_door:
+        return
+    loc = _split_path(urllib.parse.urlsplit(url).path)
+    if loc is None:
+        raise ValueError(
+            f"push 대상 URL이 /v0/<channel>/<from-x> 꼴이 아니다: {url} — "
+            "발신 문을 판정할 수 없어 거부한다(allow_foreign_door로 명시 가능)")
+    try:
+        signer_id = (json.loads(env_b.decode("utf-8")).get("signer") or {}).get("id")
+    except (ValueError, UnicodeDecodeError, AttributeError):
+        raise ValueError(
+            "봉투를 JSON으로 읽을 수 없어 발신 문을 판정할 수 없다 — 거부한다"
+        ) from None
+    door = _door_for_signer(signer_id)
+    if door is None:
+        raise ValueError(
+            f"서명자 {signer_id!r}에서 문 이름을 파생할 수 없어 거부한다"
+            "(fail-closed) — 의도한 전달이면 allow_foreign_door로 명시하세요")
+    if door != loc[1]:
+        raise ValueError(
+            f"남의 문에 쓰려 한다 — URL의 문 {loc[1]}, 이 봉투의 서명자 "
+            f"{signer_id}(자기 문 {door}). 발신은 자기 문에만 하고, 다른 집이 읽게 "
+            "하려면 자기 문에 올리면 된다(각자 pull한다). 대리 전달이 정말 의도라면 "
+            "allow_foreign_door로 명시하세요")
+
+
+def list_channels(url: str, token: str,
+                  timeout: int = CLIENT_TIMEOUT_SECONDS,
+                  warmup: bool = True, stats: dict | None = None) -> dict:
+    """서버의 channel/sender 트리를 묻는다(0.4.9) — `<base>/v0/channels`를 GET.
+
+    수거 목록을 기억이 아니라 서버에 묻기 위한 한 콜이다. 어느 랩의 수거기가
+    채널 목록을 기억으로 들다 네 문 중 두 문만 보게 된 사고가 근거 — "영수증은
+    수거가 일어났다고 말하지, 회차가 완전했다고 말한 적이 없다"(Ray). 수거기는
+    회차 시작에 이 트리와 자기 목록을 대조하면 같은 병에서 벗어난다."""
+    if warmup:
+        _warm_measured(url, stats)
+    return _request(url, token, timeout=timeout)
 
 
 def pull_quads(url: str, token: str, dest: str | Path,

@@ -113,7 +113,13 @@ def test_같은_n_재전송은_dedup_수렴_다른_내용은_409_먼저_쓴_것�
     forged = lab / "forged"
     forged.mkdir()
     env0 = (quad.parent / "001-envelope.json").read_bytes()
-    (forged / "001-envelope.json").write_bytes(env0[:-1] + b" ")
+    # 바이트는 다르되 **JSON으로는 읽히는** 위조 — 0.4.10 발신 문 게이트가 파싱
+    # 불가를 먼저 거부하므로, 이 테스트가 겨냥한 서버 409에 실제로 도달하게 한다
+    # (게이트는 문만 보고, 내용 판정은 여전히 수신 hub의 admit 몫이다).
+    forged_env = json.loads(env0.decode("utf-8"))
+    forged_env["payload"]["body_sha256"] = "0" * 64
+    (forged / "001-envelope.json").write_bytes(
+        json.dumps(forged_env, ensure_ascii=False).encode("utf-8"))
     (forged / "001-sig.txt").write_bytes((quad.parent / "001-sig.txt").read_bytes())
     with pytest.raises(hd.DropError) as e:
         hd.push_quad(post, token, forged / "001")
@@ -284,3 +290,146 @@ def test_인증실패는_limiter_호출_전_반환_무토큰GET_후_잔여예산
         assert get("member-a") == 429             # 소비는 유효 토큰 2회뿐
     finally:
         srv.shutdown()
+
+
+def test_channels_트리는_POST된_문만_보이고_문법이_거른다(drop, tmp_path):
+    """[0.4.9 LxM 036 요청 — Ray 두-문 사고] "채널이 몇 개 있는가"는 서버만
+    아는데 아무도 물을 수 없었다. 응답은 채널 목록이 아니라 channel/sender
+    **트리**다 — pull URL이 /v0/<channel>/<from-x>라 수거기에 필요한 건 문
+    목록이니까. 정직한 성질: 첫 봉투가 POST된 문만 보인다(디렉터리가 그때
+    생기므로) — 약속된 채널이 아니라 실재하는 문."""
+    url, token, root = drop
+    tree_url = f"{url}/v0/channels"
+    # 아무것도 POST되기 전 — 빈 트리(404가 아니라 정직한 빈 답)
+    assert hd.list_channels(tree_url, token, warmup=False) == {"channels": {}}
+
+    quad, _, _ = _make_quad(tmp_path)
+    hd.push_quad(f"{url}/v0/hub-ops/from-ray", token, quad, warmup=False)
+    hd.push_quad(f"{url}/v0/first-contact/from-ray", token, quad, warmup=False)
+    # 손이 만든 규격 밖 잔재는 열거에서 걸러진다(POST 문법과 같은 필터)
+    (root / "hub-ops" / "junk").mkdir()
+    (root / ".hidden" / "from-x").mkdir(parents=True)
+    (root / "empty-channel").mkdir()              # 문 없는 채널 — POST로는 불가능
+    assert hd.list_channels(tree_url, token, warmup=False) == {
+        "channels": {"first-contact": ["from-ray"], "hub-ops": ["from-ray"]}}
+
+    # 토큰 소지자 전용 — 비멤버는 401
+    with pytest.raises(hd.DropError) as e:
+        hd.list_channels(tree_url, "wrong", warmup=False)
+    assert e.value.status == 401
+
+
+def test_channels는_예산을_먹고_같은_이름_채널과_충돌하지_않는다(tmp_path):
+    """트리 조회도 멤버 콜이다(rate limit 예산 1 소비 — 회차당 1콜이라 무시
+    가능하지만 공짜는 아니다). 그리고 `channels`는 정확히 2세그먼트 경로만
+    예약이라, 같은 이름의 채널이 있어도 그 문(3세그먼트)은 그대로 산다."""
+    tok = tmp_path / "tokens.txt"
+    tok.write_text("member-a\n", encoding="utf-8")
+    root = tmp_path / "drops"
+    srv = hd.make_server(root, tok, bind="127.0.0.1", port=0,
+                         rate_limit_per_minute=2)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        base = f"http://127.0.0.1:{srv.server_address[1]}"
+        (root / "channels" / "from-a").mkdir(parents=True)   # 이름이 channels인 채널
+        r = hd.list_channels(f"{base}/v0/channels", "member-a", warmup=False)
+        assert r == {"channels": {"channels": ["from-a"]}}   # 예산 1
+        assert hd.pull_quads(f"{base}/v0/channels/from-a", "member-a",
+                             tmp_path / "in", warmup=False) == []  # 예산 2 — 문 생존
+        with pytest.raises(hd.DropError) as e:
+            hd.list_channels(f"{base}/v0/channels", "member-a", warmup=False)
+        assert e.value.status == 429                          # 예산 소진 관측
+    finally:
+        srv.shutdown()
+
+
+def test_남의_문에는_기본_거부_네트워크_접촉_전에(tmp_path):
+    """[0.4.10 실사고 산물 — 2026-08-26] 나는 우리 서명 봉투를 from-ludex·from-ray에
+    POST했다. 서버는 dumb carrier라 막지 않았고(설계된 성질), append-only라 철회도
+    못 했다. **서버가 막지 않는다는 것과 해도 된다는 것은 다르다** — 그 사이를
+    규율이 메우고 있었으므로 기계로 옮긴다.
+
+    죽은 포트를 겨냥해도 ValueError가 나는 것이 증거다: 게이트는 **어떤 요청도
+    보내기 전에** 판정한다(워밍 GET조차 나가지 않는다)."""
+    quad, _, _ = _make_quad(tmp_path)                    # 서명자 lab:ray
+    dead = "http://127.0.0.1:1/v0/hub-ops"
+    with pytest.raises(ValueError, match="남의 문"):
+        hd.push_quad(f"{dead}/from-ludex", "tok", quad)
+    # 자기 문은 게이트를 통과해 네트워크로 나간다(죽은 포트라 그 뒤에서 실패)
+    with pytest.raises(Exception) as e:
+        hd.push_quad(f"{dead}/from-ray", "tok", quad, timeout=2)
+    assert "남의 문" not in str(e.value)
+
+
+def test_발신_문_게이트_성공조건_열거_파생불가와_파싱불가는_fail_closed(tmp_path):
+    """게이트는 성공 조건 명시-나열형으로만(fail-open 3연발의 교훈). 넷 중 하나라도
+    안 서면 거부다 — 특히 **판정이 불가능한 경우가 곧 통과가 되면 안 된다**."""
+    quad, _, lab = _make_quad(tmp_path)
+    env0 = (quad.parent / "001-envelope.json").read_bytes()
+    dead = "http://127.0.0.1:1/v0/hub-ops/from-ray"
+
+    # ① URL이 문 꼴이 아니면 거부(판정 불가 = 거부)
+    with pytest.raises(ValueError, match="판정할 수 없어"):
+        hd.push_quad("http://127.0.0.1:1/v0/channels", "tok", quad)
+    # ② 봉투가 JSON이 아니면 거부
+    bad = lab / "unparseable"
+    bad.mkdir()
+    (bad / "001-envelope.json").write_bytes(env0[:-1] + b" ")
+    (bad / "001-sig.txt").write_bytes((quad.parent / "001-sig.txt").read_bytes())
+    with pytest.raises(ValueError, match="JSON으로 읽을 수 없어"):
+        hd.push_quad(dead, "tok", bad / "001")
+    # ③ signer에서 문 이름이 파생 안 되면 거부(lab 문법이 sender 문법보다 넓다)
+    assert hd._door_for_signer("lab:ray") == "from-ray"
+    assert hd._door_for_signer("lab:ludex-village") == "from-ludex-village"
+    for undelivered in ["lab:a_b", "lab:a.b", "ray", None, "lab:"]:
+        assert hd._door_for_signer(undelivered) is None
+    odd = lab / "odd"
+    odd.mkdir()
+    env_odd = json.loads(env0.decode("utf-8"))
+    env_odd["signer"]["id"] = "lab:a_b"
+    (odd / "001-envelope.json").write_bytes(
+        json.dumps(env_odd, ensure_ascii=False).encode("utf-8"))
+    (odd / "001-sig.txt").write_bytes((quad.parent / "001-sig.txt").read_bytes())
+    with pytest.raises(ValueError, match="파생할 수 없어"):
+        hd.push_quad(dead, "tok", odd / "001")
+
+
+def test_대리_전달은_명시로_열린다(drop, tmp_path):
+    """정당한 대리 전달까지 막으면 새 실패 경로를 만드는 셈이다 — 0.4.5가 회람 증인
+    수용을 `--accept-foreign-target`으로 연 것과 같은 모양으로, 명시하면 열린다.
+    (실수가 아니라 결정이 되도록 하는 것이 게이트의 목적이다.)"""
+    url, token, root = drop
+    quad, _, _ = _make_quad(tmp_path)                    # 서명자 lab:ray
+    with pytest.raises(ValueError, match="남의 문"):
+        hd.push_quad(f"{url}/v0/hub-ops/from-ludex", token, quad, warmup=False)
+    r = hd.push_quad(f"{url}/v0/hub-ops/from-ludex", token, quad, warmup=False,
+                     allow_foreign_door=True)
+    assert r == {"n": "001", "stored": True, "dedup": False}
+    assert (root / "hub-ops/from-ludex/001-envelope.json").is_file()
+
+
+def test_CLI_push_문_게이트_배선(drop, tmp_path):
+    url, token, _root = drop
+    quad, _, _ = _make_quad(tmp_path)
+    tokf = tmp_path / "one-token.txt"
+    tokf.write_text(token + "\n", encoding="utf-8")
+    args = ["push", "--url", f"{url}/v0/hub-ops/from-ludex", "--quad", str(quad),
+            "--token-file", str(tokf)]
+    env = {**os.environ, "PYTHONPATH": str(SRC)}
+    r = subprocess.run(CLI + args, cwd=tmp_path, env=env, capture_output=True,
+                       text=True, timeout=120)
+    assert r.returncode != 0 and "남의 문" in r.stderr
+    ok = _run(args + ["--accept-foreign-door"], tmp_path)
+    assert ok["stored"] is True
+
+
+def test_CLI_channels_verb_배선(drop, tmp_path):
+    url, token, _root = drop
+    quad, _, _ = _make_quad(tmp_path)
+    hd.push_quad(f"{url}/v0/hub-ops/from-ray", token, quad, warmup=False)
+    tokf = tmp_path / "one-token.txt"
+    tokf.write_text(token + "\n", encoding="utf-8")
+    r = _run(["channels", "--url", f"{url}/v0/channels",
+              "--token-file", str(tokf)], tmp_path)
+    assert r["channels"] == {"hub-ops": ["from-ray"]}
+    assert "warm_ms" in r and "warm_ok" in r      # push/pull과 같은 워밍 계측

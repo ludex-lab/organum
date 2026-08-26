@@ -29,33 +29,100 @@ def _tagged_hash(tag: str, msg: bytes) -> bytes:
     return hashlib.sha256(t + t + msg).digest()
 
 
-# ── 점 연산 (Jacobian 없이 아핀 — 참조 구현의 명료성 우선) ──────────────────
+# ── 점 연산 (야코비 좌표) ───────────────────────────────────────────────────
+#
+# 야코비 `(X, Y, Z)`는 아핀 `(X/Z², Y/Z³)`를 뜻하고, 무한원점은 `Z == 0`이다.
+#
+# **왜 아핀을 버렸나 (2026-08-26, 실측이 시킨 일)**: 아핀 덧셈은 기울기를 구할 때마다
+# 모듈러 역원 `pow(x, P-2, P)`를 부른다 — 256비트 모듈러 거듭제곱이 **덧셈 한 번마다**
+# 한 번이다. 검증 1회에 ~1,500번이 쌓여 이벤트당 113ms가 됐고, "로그가 곧 상태"라
+# 매 명령이 전체 로그를 재생하는 hub에서 이게 벽으로 나타났다: 97 이벤트 재생 11초,
+# 그중 **10.9초가 여기**(프로파일: `pow()` 74,638회). 하루 11.5건씩 쌓이던 속도로는
+# 석 달 뒤 명령 하나에 2분이었다. 야코비는 역원을 **마지막 한 번**으로 미룬다.
+#
+# 바뀌지 않는 것: 서명 형식도, 검증 판정도 비트 단위로 같다. 그 동일성은 공식
+# BIP-340 벡터 19건(**거부되어야 하는 음성 10건 포함**)이 매 실행 고정한다 —
+# 최적화가 음성 케이스를 조용히 열어젖히는 것이 이런 전환의 전형적 사고라서,
+# 벡터를 먼저 깔고 전환했다. 상수시간이 아닌 것은 그대로다(good-faith 위협 모델).
+
+_INFINITY = (0, 0, 0)
+
+
+def _jac_double(p):
+    x, y, z = p
+    if z == 0 or y == 0:
+        return _INFINITY
+    a = x * x % P
+    b = y * y % P
+    c = b * b % P
+    d = 2 * ((x + b) * (x + b) - a - c) % P
+    e = 3 * a % P
+    f = e * e % P
+    x3 = (f - 2 * d) % P
+    return x3, (e * (d - x3) - 8 * c) % P, 2 * y * z % P
+
+
+def _jac_add(p, q):
+    if p[2] == 0:
+        return q
+    if q[2] == 0:
+        return p
+    x1, y1, z1 = p
+    x2, y2, z2 = q
+    z1z1 = z1 * z1 % P
+    z2z2 = z2 * z2 % P
+    u1 = x1 * z2z2 % P
+    u2 = x2 * z1z1 % P
+    s1 = y1 * z2 % P * z2z2 % P
+    s2 = y2 * z1 % P * z1z1 % P
+    if u1 == u2:
+        # 같은 x — 같은 점이면 두 배, 아니면 서로의 역원이라 무한원점이다.
+        return _jac_double(p) if s1 == s2 else _INFINITY
+    h = (u2 - u1) % P
+    i = 4 * h * h % P
+    j = h * i % P
+    r = 2 * (s2 - s1) % P
+    v = u1 * i % P
+    x3 = (r * r - j - 2 * v) % P
+    y3 = (r * (v - x3) - 2 * s1 * j) % P
+    z3 = ((z1 + z2) * (z1 + z2) - z1z1 - z2z2) % P * h % P
+    return x3, y3, z3
+
+
+def _to_affine(p):
+    """야코비 → 아핀. **여기서만** 모듈러 역원을 한 번 쓴다. 무한원점은 None."""
+    x, y, z = p
+    if z == 0:
+        return None
+    zinv = pow(z, P - 2, P)
+    zinv2 = zinv * zinv % P
+    return x * zinv2 % P, y * zinv2 % P * zinv % P
+
+
+def _jac_mul(point, k: int):
+    """아핀 점 × 스칼라 → **야코비**(호출자가 필요할 때 한 번만 아핀으로 내린다)."""
+    r = _INFINITY
+    q = (point[0], point[1], 1)
+    while k:
+        if k & 1:
+            r = _jac_add(r, q)
+        q = _jac_double(q)
+        k >>= 1
+    return r
+
+
+def _point_mul(point, k: int):
+    """아핀 in → 아핀 out(무한원점 None). 종전 API·의미를 그대로 보존한다."""
+    return _to_affine(_jac_mul(point, k))
+
 
 def _point_add(a, b):
+    """아핀 덧셈 — 종전 API 보존. 뜨거운 경로(verify)는 야코비로 직접 간다."""
     if a is None:
         return b
     if b is None:
         return a
-    ax, ay = a
-    bx, by = b
-    if ax == bx and (ay + by) % P == 0:
-        return None
-    if a == b:
-        lam = (3 * ax * ax) * pow(2 * ay, P - 2, P) % P
-    else:
-        lam = (by - ay) * pow(bx - ax, P - 2, P) % P
-    x = (lam * lam - ax - bx) % P
-    return x, (lam * (ax - x) - ay) % P
-
-
-def _point_mul(point, k: int):
-    r = None
-    while k:
-        if k & 1:
-            r = _point_add(r, point)
-        point = _point_add(point, point)
-        k >>= 1
-    return r
+    return _to_affine(_jac_add((a[0], a[1], 1), (b[0], b[1], 1)))
 
 
 def _lift_x(x: int):
@@ -122,10 +189,8 @@ def verify(sig: bytes, msg: bytes, pubkey: bytes) -> bool:
         return False
     e = _int_from(_tagged_hash("BIP0340/challenge",
                                sig[:32] + pubkey + msg)) % N
-    # R = s·G - e·P
-    sg = _point_mul((GX, GY), s)
-    ep = _point_mul(point, N - e)
-    rp = _point_add(sg, ep)
+    # R = s·G - e·P — 두 스칼라곱과 덧셈을 야코비로 잇고 **마지막에 한 번만** 내린다
+    rp = _to_affine(_jac_add(_jac_mul((GX, GY), s), _jac_mul(point, N - e)))
     if rp is None:
         return False
     rx, ry = rp

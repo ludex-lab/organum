@@ -9,6 +9,7 @@ B가 오프라인 검증하고 ⑥ B가 키를 회전·폐기해도 이력이 �
 """
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -176,11 +177,22 @@ def test_attest_재시도는_수렴(capsys, ws):
 
 
 def test_keygen은_덮어쓰지_않고_0600(capsys, ws):
+    """[Ray 038, 2026-08-26 Windows 실측] POSIX 모드 단언은 NTFS에서 0o666으로
+    읽혀 실패한다. 그런데 이건 시험 결함이 아니라 **실제 보안 성질의 차이**다 —
+    Windows에서 seed는 파일 모드가 아니라 홈 디렉터리 ACL로만 지켜진다.
+
+    그래서 조용히 통과시키지 않는다: POSIX에서는 종전대로 0o600을 강제하고,
+    비-POSIX에서는 **모드로는 보호가 성립하지 않는다**는 사실을 실패가 아니라
+    명시적 스킵 사유로 남긴다(`-rs`로 읽힌다). 덮어쓰기 보호는 두 플랫폼 공통이라
+    스킵 밖에 둔다 — 플랫폼 분기가 시험 자체를 삼키지 않게."""
     rc, k = run(capsys, "keygen", "me")
     assert rc == 0
-    assert (ws / "me.seed").stat().st_mode & 0o777 == 0o600
     rc2, _ = run(capsys, "keygen", "me")
-    assert rc2 == 2                                       # 기존 seed 보호
+    assert rc2 == 2                          # 덮어쓰기 보호 — 플랫폼 공통, 스킵 밖
+    if os.name != "posix":
+        pytest.skip("비-POSIX: seed 보호가 파일 모드로 성립하지 않는다 — "
+                    "이 플랫폼에서는 홈 디렉터리 ACL에 의존한다(문서화된 성질)")
+    assert (ws / "me.seed").stat().st_mode & 0o777 == 0o600
 
 
 def test_미등록_키의_봉투는_거부(capsys, ws):
@@ -600,6 +612,48 @@ def test_verify_envelope는_장부_무접촉_검증(capsys, ws):
     rc, r = run(capsys, "verify-envelope", "--envelope", "v-env.json",
                 "--sig", bad, "--pubkey", sig["pubkey"])
     assert rc == 1 and r["valid_signature"] is False
+
+
+def test_verify_envelope가_키를_장부에서_꺼낸다(capsys, ws):
+    """[0.4.12 실사고 — 저자가 0.4.8 출하 나흘 뒤 같은 사고를 반복] `--pubkey`가
+    필수라, "장부를 안 건드리고 확인만" 하려던 사람이 정확히 그 순간 신원 재료를
+    기억에서 꺼내게 된다. 읽기 전용 replay는 장부 접촉이 아니다 — `--dir`로 파생하되
+    `ledger_touched`는 여전히 false이고 로그도 전진하지 않는다."""
+    a_pub, b_pub, _ = _setup(capsys, ws)                  # hub = lab:a/hub, lab:b 등록
+    body = b"registry-derived"
+    Path("d-body.md").write_bytes(body)
+    env = _msg_env("lab:b", "lab:a", body)
+    Path("d.json").write_text(json.dumps(env, ensure_ascii=False), encoding="utf-8")
+    rc, s = run(capsys, "sign", "--key", "lab-b.seed", "--envelope", "d.json")
+    before = (ws / "hub" / "events.jsonl").read_bytes()
+
+    # ① --pubkey 없이 --dir만 — registry 결속에서 파생
+    rc, r = run(capsys, "verify-envelope", "--envelope", "d.json",
+                "--sig", s["sig"], "--dir", "hub", "--body", "d-body.md")
+    assert rc == 0 and r["valid_signature"] is True
+    assert r["ledger_touched"] is False
+    assert (ws / "hub" / "events.jsonl").read_bytes() == before   # 로그 무전이
+
+    # ② 손으로 친 키가 registry와 다르면 **검증 전에** 거부(0.4.8과 같은 술어)
+    wrong = s["pubkey"][:8] + ("0" * 48) + s["pubkey"][-8:]       # 그 사고의 모양
+    rc, _ = run(capsys, "verify-envelope", "--envelope", "d.json",
+                "--sig", s["sig"], "--dir", "hub", "--pubkey", wrong)
+    assert rc == 2                                                # HubCliError
+
+    # ③ 미등록 signer는 --dir이 있어도 명시 키를 요구(첫인상은 결정이어야 한다)
+    env2 = _msg_env("lab:unknown", "lab:a", body)
+    Path("u.json").write_text(json.dumps(env2, ensure_ascii=False), encoding="utf-8")
+    rc, s2 = run(capsys, "sign", "--key", "lab-b.seed", "--envelope", "u.json")
+    rc, _ = run(capsys, "verify-envelope", "--envelope", "u.json",
+                "--sig", s2["sig"], "--dir", "hub")
+    assert rc == 2
+    # ④ hub 없는 TOFU 경로는 종전 그대로
+    rc, r = run(capsys, "verify-envelope", "--envelope", "d.json",
+                "--sig", s["sig"], "--pubkey", s["pubkey"])
+    assert rc == 0 and r["valid_signature"] is True
+    # ⑤ 둘 다 없으면 거부(판정 재료 없이 통과시키지 않는다)
+    rc, _ = run(capsys, "verify-envelope", "--envelope", "d.json", "--sig", s["sig"])
+    assert rc == 2
 
 
 def test_admit_비수신자_기본_거부_회람은_명시_플래그(capsys, ws):
