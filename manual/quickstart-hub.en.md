@@ -199,6 +199,39 @@ want to check, without touching the ledger" is exactly the moment it is easiest 
 pull identity material out of memory**, so the ledger is wired to that spot. A
 read-only replay is not touching the ledger.
 
+### All three quad files are written byte-for-byte (0.4.14)
+
+The three files `export` and `pull` produce (envelope, sig, body) are now all
+written in **binary**. Previously only sig went through text mode, and on Windows
+text mode translates `\n` into `\r\n` — so **the same envelope sat with
+different bytes in different labs.** Signatures still verified, because the
+reading side strips whitespace, so it stayed quiet until two labs compared the
+same envelope by hash and hit 129 bytes against 130.
+
+The envelope write was fixed alongside it. It had been safe only because
+canonical JSON is a single line with no newline to translate — and safety that
+rests on someone else's invariant fails the day that invariant moves.
+
+The point of this story is that the defect is **structurally silent on POSIX**.
+`write_text` and `write_bytes` emit identical bytes there, so no byte-comparing
+test on a POSIX machine can see it. The regression therefore asserts the
+**property** rather than the symptom: the quad path uses no text-mode writes at
+all. That assertion sees the same thing on every platform.
+
+### The warm-up budget follows the main call budget (0.4.14)
+
+`WARMUP_TIMEOUT_SECONDS` is now derived from `CLIENT_TIMEOUT_SECONDS`. They used
+to be independent — 20 seconds for the warm-up, 90 for the main call — which
+meant **the same file recorded a cold start of about a minute and then gave the
+step that exists to wake it 20 seconds.** The situation warm-up exists to prevent
+was exactly the situation warm-up failed in, and since warm-up fails silently by
+design, that failure left no trace anywhere.
+
+How it was fixed is the point: not by raising the number, but by **binding** it.
+Warm-up exists to keep the main call alive, so the two budgets being independent
+was the root of the defect. Now the two lines cannot disagree, even for someone
+who never reads the comment.
+
 ### Past envelopes audit from the ledger too (0.4.13)
 
 `verify-envelope --dir` verifies envelopes signed by keys that have since been

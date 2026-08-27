@@ -67,7 +67,22 @@ _WINDOW_SECONDS = 60.0
 CLIENT_TIMEOUT_SECONDS = 90         # 콜드스타트(~1분, free hosted) 실측이 정한 기본값
                                     # — Ludex 관찰: 종전 30s 고정이 콜드스타트와 겹쳐
                                     # 핸드셰이크 EOF로 보였다. 재푸시는 dedup 멱등.
-WARMUP_TIMEOUT_SECONDS = 20         # 무인증 깨우기 GET (0.4.6) — 예산 무소비(_warm)
+
+# 무인증 깨우기 GET(0.4.6)의 예산 — **본 호출 예산에서 파생한다**(0.4.14, Ray 045).
+#
+# 종전엔 20초 독립 상수였는데, 같은 파일 세 줄 위가 콜드스타트를 ~1분으로 적고
+# 있었다. **두 상수가 같은 콜드스타트에 대해 서로 다른 말을 하고 있었다**: 워밍이
+# 막으라고 있는 상황(진짜로 식은 인스턴스)이 정확히 워밍이 실패하는 상황이었고,
+# `_warm`은 설계대로 조용히 삼키므로 실패한 사실이 아무 데도 안 남았다.
+# Ray 실측: 무인증 GET이 401을 돌려주기까지 55초 — 20초 예산으로는 구조적으로
+# 도달할 수 없다. 같은 날 그들 pull(timeout 170)은 살고 push는 죽었다.
+#
+# 숫자를 올리지 않고 **결속**한다: 워밍이 존재하는 이유가 본 호출을 살리는 것이므로
+# 두 예산이 독립인 것이 결함의 뿌리였다. 이렇게 두면 다음 사람이 이 주석을 안 읽어도
+# 두 줄이 어긋날 수 없다(호스트 티어가 바뀌어 90을 고치면 워밍도 따라 움직인다).
+# 대가: 인스턴스가 진짜 죽었을 때 최악 벽시계가 워밍+본 호출로 늘어난다 —
+# 워밍 실패는 여전히 본 호출을 막지 않으므로 보험의 성질은 그대로다.
+WARMUP_TIMEOUT_SECONDS = CLIENT_TIMEOUT_SECONDS
 
 _CHANNEL_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _SENDER_RE = re.compile(r"^from-[a-z0-9][a-z0-9-]{0,63}$")
@@ -312,7 +327,7 @@ class _DropHandler(BaseHTTPRequestHandler):
                                           "먼저 쓴 것이 남는다"})
             return
         # 쓰기 순서: sig·body 먼저, envelope 마지막 — envelope가 완성 표지
-        (dirp / f"{n}-sig.txt").write_text(sig + "\n", encoding="utf-8")
+        (dirp / f"{n}-sig.txt").write_bytes((sig + "\n").encode("utf-8"))
         if body_name is not None:
             (dirp / f"{n}-{body_name}").write_bytes(body_b)
         env_p.write_bytes(env_b)
@@ -522,7 +537,8 @@ def pull_quads(url: str, token: str, dest: str | Path,
                 raise DropError(502, f"서버가 준 n이 형식 위반: {n!r}")
             env_p = dest / f"{n}-envelope.json"
             if not env_p.exists():
-                (dest / f"{n}-sig.txt").write_text(q["sig"] + "\n", encoding="utf-8")
+                (dest / f"{n}-sig.txt").write_bytes(
+                    (q["sig"] + "\n").encode("utf-8"))
                 if q.get("body_name"):
                     if not _BODY_NAME_RE.match(q["body_name"]):
                         raise DropError(502, f"서버가 준 body_name 형식 위반: "

@@ -12,6 +12,7 @@ import base64
 import http.client
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -341,6 +342,59 @@ def test_channels는_예산을_먹고_같은_이름_채널과_충돌하지_않�
         assert e.value.status == 429                          # 예산 소진 관측
     finally:
         srv.shutdown()
+
+
+def test_quad_세_파일이_전부_바이너리로_쓰인다(drop, tmp_path, monkeypatch):
+    """[0.4.14 — Ray 042, Windows 실측] `Path.write_text`는 텍스트 모드라 Windows에서
+    `\\n`을 `\\r\\n`으로 번역한다. quad 셋 중 sig만 그렇게 쓰이고 있어서 **같은 봉투가
+    랩마다 다른 바이트로 앉았다**(129B vs 130B 병합 충돌로 발견). 서명은 읽는 쪽이
+    strip해서 통과하므로 조용했다.
+
+    **이 결함은 POSIX에서 구조상 침묵이다** — `write_text`와 `write_bytes`가 같은
+    바이트를 내므로 바이트를 단언하는 시험은 우리 집에서 공허하게 통과한다(egg-info
+    교훈의 재판). 그래서 증상이 아니라 **성질**을 시험한다: quad 경로가 텍스트 모드
+    쓰기를 아예 쓰지 않는다는 것. 이 단언은 모든 플랫폼에서 같은 것을 본다."""
+    url, token, root = drop
+    quad, _, _ = _make_quad(tmp_path)
+
+    real_write_text = Path.write_text
+
+    def _forbidden(self, *a, **kw):                 # quad 경로에서만 금지
+        if re.match(r"^\d{3}-(envelope\.json|sig\.txt|body\.)", self.name):
+            raise AssertionError(f"quad 파일이 텍스트 모드로 쓰였다: {self.name}")
+        return real_write_text(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "write_text", _forbidden)
+    # 서버 POST 경로(저장) · 클라 pull 경로(수신) 둘 다 quad를 물화한다
+    hd.push_quad(f"{url}/v0/hub-ops/from-ray", token, quad, warmup=False)
+    dest = tmp_path / "recv"
+    assert hd.pull_quads(f"{url}/v0/hub-ops/from-ray", token, dest,
+                         warmup=False) == ["001"]
+
+    # 그리고 실제 바이트도 세 파일 전부 원본과 동일해야 한다(양쪽 트리 교차)
+    for name in ["001-envelope.json", "001-sig.txt", "001-body.md"]:
+        src = (quad.parent / name).read_bytes()
+        assert (root / "hub-ops/from-ray" / name).read_bytes() == src, name
+        assert (dest / name).read_bytes() == src, name
+        assert b"\r" not in src, name
+
+
+def test_워밍_예산은_본_호출_예산에서_파생된다(tmp_path):
+    """[0.4.14 — Ray 045] 종전 두 상수(워밍 20s / 본 호출 90s)가 **같은 콜드스타트에
+    대해 서로 다른 말**을 했다. 워밍이 막으라고 있는 상황이 정확히 워밍이 실패하는
+    상황이었고, `_warm`이 설계대로 조용히 삼키므로 실패가 아무 데도 안 남았다
+    (Ray 실측: 무인증 GET 401까지 55초).
+
+    숫자를 올리는 대신 **결속**한다 — 다음 사람이 주석을 안 읽어도 두 줄이 어긋날 수
+    없도록. 이 시험은 상수 두 줄만 읽어도 참이라 네트워크가 필요 없다."""
+    assert hd.WARMUP_TIMEOUT_SECONDS == hd.CLIENT_TIMEOUT_SECONDS, (
+        "워밍 예산이 본 호출 예산과 갈라졌다 — 워밍은 본 호출을 살리려고 있으므로 "
+        "두 예산이 독립이면 같은 결함이 다시 선다")
+    # 결속의 물증: 본 호출 예산을 바꾸면 워밍도 따라 움직인다(파생이지 우연이 아님)
+    src = (Path(hd.__file__).read_text(encoding="utf-8"))
+    assert "WARMUP_TIMEOUT_SECONDS = CLIENT_TIMEOUT_SECONDS" in src
+    # 그래도 워밍은 게이트가 아니다 — 실패해도 예외가 새지 않는다(0.4.6 성질 보존)
+    assert hd._warm("http://127.0.0.1:1/v0/ch/from-a", timeout=1) is False
 
 
 def test_남의_문에는_기본_거부_네트워크_접촉_전에(tmp_path):

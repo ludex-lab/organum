@@ -508,8 +508,12 @@ def cmd_export(a):
     nnn = f"{(max(used) + 1) if used else 1:03d}"
     env_p = out / f"{nnn}-envelope.json"
     sig_p = out / f"{nnn}-sig.txt"
-    env_p.write_text(rec["raw"], encoding="utf-8")
-    sig_p.write_text(rec["sig"] + "\n", encoding="utf-8")
+    # quad는 **바이트 정확**해야 한다 — 텍스트 모드는 Windows에서 \n을 \r\n으로
+    # 번역해 같은 봉투가 랩마다 다른 바이트로 앉는다(Ray 042, 0.4.14).
+    # envelope 쪽은 오늘 무사하지만 그건 canonical JSON이 한 줄이라 번역할 \n이
+    # 없어서일 뿐이다 — 다른 불변식에 기대는 안전이라 함께 바이트로 고정한다.
+    env_p.write_bytes(rec["raw"].encode("utf-8"))
+    sig_p.write_bytes((rec["sig"] + "\n").encode("utf-8"))
     written = [str(env_p), str(sig_p)]
     if a.body:
         body_src = Path(a.body)
