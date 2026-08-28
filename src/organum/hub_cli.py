@@ -652,6 +652,7 @@ def cmd_push(a):
     st: dict = {}
     try:
         r = hd.push_quad(a.url, token, a.quad, timeout=a.timeout, stats=st,
+                         warmup=not a.no_warmup,
                          allow_foreign_door=a.accept_foreign_door)
     except (ValueError, hd.DropError) as e:
         raise HubCliError(str(e))
@@ -664,7 +665,7 @@ def cmd_pull(a):
     st: dict = {}
     try:
         ns = hd.pull_quads(a.url, token, a.dest, since=a.since, timeout=a.timeout,
-                           stats=st)
+                           stats=st, warmup=not a.no_warmup)
     except (ValueError, hd.DropError) as e:
         raise HubCliError(str(e))
     print(json.dumps({"pulled": ns, "dest": str(Path(a.dest)), **st},
@@ -677,7 +678,8 @@ def cmd_channels(a):
     token = hd.load_tokens(a.token_file)[0]
     st: dict = {}
     try:
-        r = hd.list_channels(a.url, token, timeout=a.timeout, stats=st)
+        r = hd.list_channels(a.url, token, timeout=a.timeout, stats=st,
+                             warmup=not a.no_warmup)
     except (ValueError, hd.DropError) as e:
         raise HubCliError(str(e))
     print(json.dumps({**r, **st}, ensure_ascii=False))
@@ -773,6 +775,7 @@ def main(argv=None) -> int:
                             ("--timeout",
                              {"type": int,
                               "default": hd.CLIENT_TIMEOUT_SECONDS}),
+                            ("--no-warmup", {"action": "store_true"}),
                             ("--accept-foreign-door",
                              {"action": "store_true"})]),
         ("pull", cmd_pull, [("--url", {"required": True}),
@@ -781,12 +784,14 @@ def main(argv=None) -> int:
                             ("--since", {"default": None}),
                             ("--timeout",
                              {"type": int,
-                              "default": hd.CLIENT_TIMEOUT_SECONDS})]),
+                              "default": hd.CLIENT_TIMEOUT_SECONDS}),
+                            ("--no-warmup", {"action": "store_true"})]),
         ("channels", cmd_channels, [("--url", {"required": True}),
                                     ("--token-file", {"required": True}),
                                     ("--timeout",
                                      {"type": int,
-                                      "default": hd.CLIENT_TIMEOUT_SECONDS})]),
+                                      "default": hd.CLIENT_TIMEOUT_SECONDS}),
+                                    ("--no-warmup", {"action": "store_true"})]),
         ("rotate-key", cmd_rotate_key, [("--dir", {"required": True}),
                                         ("--key", {"required": True}),
                                         ("--signer", {"required": True}),

@@ -5,6 +5,7 @@
 
 import http.client
 import json
+import re
 import tempfile
 import threading
 import unittest
@@ -175,9 +176,45 @@ class Inv5_읽기쓰기_의미는_세_표면에서_같다(unittest.TestCase):
 
 class Inv6_표시는_실동작과_일치(unittest.TestCase):
     def test_version_single_source(self):
+        """설치 메타데이터가 **소스와 같은 판**을 말하는지 — 다른 사본과 교차한다.
+
+        [0.4.15, Ludex 051 야생 실측] 종전 이 시험은
+        `organum.__version__ == version("organum")`이었는데, `__version__`이 **곧**
+        `importlib.metadata.version("organum")`이라 **같은 사본을 자기와 비교**하는
+        공허 통과였다. 우리 egg-info 사고 때 이 병을 진단해 놓고 벤더 목록만
+        기계화하고 이 자리는 그대로 뒀다.
+
+        그리고 이웃이 야생에서 밟았다: Ludex는 editable 설치라 **코드는 0.4.14인데
+        `__version__`은 0.4.5**를 말하고 있었다(메타데이터가 옛 판에서 굳음).
+        *"라벨과 물건이 갈라지면 진단이 죽는다"* — 그들 문장이다. 종전 시험은 그
+        상태에서도 초록불이었다.
+
+        그래서 **다른 사본**과 교차한다: `pyproject.toml`은 빌드가 읽는 원천이고
+        설치 메타데이터와 독립적으로 갱신된다. 못 찾으면 조용히 넘기지 않고
+        시끄럽게 실패한다(스킵은 초록불 거짓말의 다른 이름이다)."""
         import organum
         from importlib.metadata import version
-        self.assertEqual(organum.__version__, version("organum"))
+        root = Path(__file__).resolve().parents[1]
+        pyproject = root / "pyproject.toml"
+        self.assertTrue(pyproject.is_file(),
+                        f"pyproject.toml을 못 찾았다({pyproject}) — 교차할 사본이 "
+                        "없으면 이 시험은 아무것도 지키지 못한다")
+        try:
+            import tomllib
+            declared = tomllib.loads(
+                pyproject.read_text(encoding="utf-8"))["project"]["version"]
+        except ModuleNotFoundError:                             # py3.10
+            m = re.search(r'^version\s*=\s*"([^"]+)"',
+                          pyproject.read_text(encoding="utf-8"), re.M)
+            self.assertIsNotNone(m, "pyproject에서 version을 못 읽었다")
+            declared = m.group(1)
+        installed = version("organum")
+        self.assertEqual(
+            installed, declared,
+            f"설치 메타데이터({installed})와 pyproject({declared})가 갈렸다 — "
+            "editable 설치가 옛 판에서 굳었거나 재설치가 빠졌다. 코드가 맞아도 "
+            "'몇 판이냐'에 잘못 답하는 상태이고, 그러면 진단이 죽는다")
+        self.assertEqual(organum.__version__, installed)
         self.assertNotEqual(organum.__version__, "0.0.1")      # 유령 버전 회귀 방지
 
     # 벤더 목록은 **하중 선언인데 사본이 여럿**이다(등록부 + 모듈 docstring + 퀵스타트

@@ -477,6 +477,39 @@ def test_CLI_push_문_게이트_배선(drop, tmp_path):
     assert ok["stored"] is True
 
 
+def test_CLI_no_warmup이_워밍을_실제로_끈다(drop, tmp_path):
+    """[0.4.15 — Ray 055] 0.4.14가 워밍 예산을 본 호출 예산에 결속한 뒤, **문마다
+    워밍하는 클라이언트**는 호스트가 죽은 날 `문 수 × (워밍+본 호출)`을 문다.
+    라이브러리엔 `warmup=False`가 있었지만 **CLI가 그걸 노출하지 않아** CLI 소비자
+    (우리 수거기 포함)는 회차당 1회 워밍으로 갈 수 없었다 — 계약이 아니라 표면의 구멍.
+
+    선언이 아니라 관측으로 고정한다: `warm_ms`/`warm_ok`가 결과에 실리는 성질을
+    이용해, 플래그가 있으면 그 키가 **아예 나오지 않는** 것을 본다."""
+    url, token, root = drop
+    quad, _, _ = _make_quad(tmp_path)
+    tokf = tmp_path / "one-token.txt"
+    tokf.write_text(token + "\n", encoding="utf-8")
+    post = f"{url}/v0/hub-ops/from-ray"
+
+    r = _run(["push", "--url", post, "--quad", str(quad),
+              "--token-file", str(tokf), "--no-warmup"], tmp_path)
+    assert r["stored"] is True
+    assert "warm_ms" not in r and "warm_ok" not in r      # 워밍이 아예 안 돌았다
+
+    r = _run(["pull", "--url", post, "--dest", str(tmp_path / "in"),
+              "--token-file", str(tokf), "--no-warmup"], tmp_path)
+    assert r["pulled"] == ["001"] and "warm_ms" not in r
+
+    r = _run(["channels", "--url", f"{url}/v0/channels",
+              "--token-file", str(tokf), "--no-warmup"], tmp_path)
+    assert r["channels"] == {"hub-ops": ["from-ray"]} and "warm_ms" not in r
+
+    # 플래그 없이는 종전대로 워밍이 돈다(기본값을 안 바꿨다는 물증)
+    r = _run(["channels", "--url", f"{url}/v0/channels",
+              "--token-file", str(tokf)], tmp_path)
+    assert "warm_ms" in r and "warm_ok" in r
+
+
 def test_CLI_channels_verb_배선(drop, tmp_path):
     url, token, _root = drop
     quad, _, _ = _make_quad(tmp_path)
