@@ -477,6 +477,45 @@ def test_CLI_push_문_게이트_배선(drop, tmp_path):
     assert ok["stored"] is True
 
 
+def test_호출별_timeout이_워밍_단계까지_관통한다(tmp_path, monkeypatch):
+    """[0.4.16 — Orin 026] 0.4.14가 워밍 예산을 본 호출 예산에 결속했는데 그건
+    **기본값 둘**의 결속이었고, 호출별 override는 본 요청에만 닿았다. 그래서
+    `--timeout 7`이 "전체 7초"가 아니라 **"워밍 최대 90초 + 본 요청 7초"**였다.
+
+    예산을 좁히는 쪽은 대개 급한 쪽인데 그 사람이 정확히 못 받고 있었다.
+    세 public 경로(push·pull·channels) 전부에서 고정한다 — 하나만 고치면 형제가
+    남는다는 것이 이번 주의 반복 교훈이다."""
+    seen: dict = {}
+    monkeypatch.setattr(hd, "_warm",
+                        lambda url, timeout=hd.WARMUP_TIMEOUT_SECONDS:
+                        seen.__setitem__("warm", timeout) or False)
+    monkeypatch.setattr(hd, "_request",
+                        lambda url, token, data=None,
+                        timeout=hd.CLIENT_TIMEOUT_SECONDS:
+                        seen.__setitem__("req", timeout) or
+                        {"quads": [], "more": False, "channels": {},
+                         "n": "001", "stored": True, "dedup": False})
+    quad, _, _ = _make_quad(tmp_path)
+    url = "http://example.invalid/v0/hub-ops/from-ray"
+
+    for label, call in [
+        ("pull", lambda: hd.pull_quads(url, "t", tmp_path / "d", since="000",
+                                       timeout=7)),
+        ("push", lambda: hd.push_quad(url, "t", quad, timeout=7)),
+        ("channels", lambda: hd.list_channels("http://example.invalid/v0/channels",
+                                              "t", timeout=7)),
+    ]:
+        seen.clear()
+        call()
+        assert seen.get("warm") == 7, f"{label}: 워밍이 호출 예산을 못 받았다"
+        assert seen.get("req") == 7, f"{label}: 본 요청이 호출 예산을 못 받았다"
+
+    # 인자를 안 주면 결속된 기본값 그대로(0.4.14 성질 보존)
+    seen.clear()
+    hd.pull_quads(url, "t", tmp_path / "d2", since="000")
+    assert seen["warm"] == hd.WARMUP_TIMEOUT_SECONDS == hd.CLIENT_TIMEOUT_SECONDS
+
+
 def test_CLI_no_warmup이_워밍을_실제로_끈다(drop, tmp_path):
     """[0.4.15 — Ray 055] 0.4.14가 워밍 예산을 본 호출 예산에 결속한 뒤, **문마다
     워밍하는 클라이언트**는 호스트가 죽은 날 `문 수 × (워밍+본 호출)`을 문다.

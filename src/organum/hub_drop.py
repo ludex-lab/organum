@@ -371,15 +371,23 @@ def _warm(url: str, timeout: int = WARMUP_TIMEOUT_SECONDS) -> bool:
         return False
 
 
-def _warm_measured(url: str, stats: dict | None = None) -> bool:
+def _warm_measured(url: str, stats: dict | None = None, *,
+                   timeout: int = WARMUP_TIMEOUT_SECONDS) -> bool:
     """워밍 + **지연 계측**(0.4.6). 호스트가 "이 시각엔 따뜻하다"고 공지할 때,
     그 공지의 생사는 약속이 아니라 **관측**으로 판정돼야 한다 —
     *"등록되어 있다는 것과 오늘 아침에 돌았다는 것은 다른 사실이다"*(LxM 022).
 
     멤버의 평상 트래픽이 그대로 증거가 된다: 공지 시각에 `warm_ms`가 수십 ms면
-    시간표가 돌았고, 수만 ms면 안 돌았다. 추가 요청도 새 인프라도 없다."""
+    시간표가 돌았고, 수만 ms면 안 돌았다. 추가 요청도 새 인프라도 없다.
+
+    `timeout`은 **호출자의 예산을 관통시킨다**(0.4.16, Orin 026). 0.4.14가
+    `WARMUP_TIMEOUT_SECONDS = CLIENT_TIMEOUT_SECONDS`로 **기본값 둘**을 결속했는데,
+    호출별 override는 본 요청에만 닿고 워밍은 계속 기본값을 썼다 — 그래서
+    `--timeout 7`이 "전체 7초"가 아니라 **"워밍 최대 90초 + 본 요청 7초"**였다.
+    결속이 기본값 층에서만 성립하고 호출 층에서 끊겨 있었다는 뜻이다. 예산을
+    좁히는 쪽은 대개 급한 쪽인데, 그 사람이 정확히 못 받고 있었다."""
     t0 = time.monotonic()
-    ok = _warm(url)
+    ok = _warm(url, timeout=timeout)
     if stats is not None:
         stats["warm_ms"] = int((time.monotonic() - t0) * 1000)
         stats["warm_ok"] = ok
@@ -424,7 +432,7 @@ def push_quad(url: str, token: str, quad_prefix: str | Path,
         raise ValueError(f"quad 불완전: {env_p.name} / {sig_p.name} 필요")
     _check_door(url, env_p.read_bytes(), allow_foreign_door)
     if warmup:
-        _warm_measured(url, stats)
+        _warm_measured(url, stats, timeout=timeout)
     bundle = {"n": n,
               "envelope_b64": base64.b64encode(env_p.read_bytes()).decode("ascii"),
               "sig": sig_p.read_text(encoding="utf-8").strip(),
@@ -507,7 +515,7 @@ def list_channels(url: str, token: str,
     수거가 일어났다고 말하지, 회차가 완전했다고 말한 적이 없다"(Ray). 수거기는
     회차 시작에 이 트리와 자기 목록을 대조하면 같은 병에서 벗어난다."""
     if warmup:
-        _warm_measured(url, stats)
+        _warm_measured(url, stats, timeout=timeout)
     return _request(url, token, timeout=timeout)
 
 
@@ -521,7 +529,7 @@ def pull_quads(url: str, token: str, dest: str | Path,
 
     `stats` dict를 주면 워밍 계측(`warm_ms`·`warm_ok`)을 채워 준다."""
     if warmup:
-        _warm_measured(url, stats)
+        _warm_measured(url, stats, timeout=timeout)
     dest = Path(dest)
     dest.mkdir(parents=True, exist_ok=True)
     if since is None:
