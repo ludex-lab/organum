@@ -241,9 +241,15 @@ def test_rate_limit_초과는_429_Retry_After_401은_예산을_안_먹고_토큰
 
 
 def test_클라이언트_timeout_인자_배선(drop, tmp_path):
-    """0.4.2: push/pull이 timeout을 받는다(기본 90 — 콜드스타트 ~1분 실측 반영)."""
+    """0.4.2: push/pull이 timeout을 받는다. 기본값은 콜드스타트 **분포 관측** 위 —
+    90("~1분" 실측)은 천장에 잘린 값들로 정한 수였고(Ray 061: 천장 400에서 완주
+    207~248초), 0.4.17에서 관측 최대 위 300으로. 이 단언은 값 자체가 아니라
+    "기본값이 관측된 완주 분포를 덮는다"는 성질을 고정한다."""
     url, token, root = drop
-    assert hd.CLIENT_TIMEOUT_SECONDS == 90
+    assert hd.CLIENT_TIMEOUT_SECONDS == 300
+    assert hd.CLIENT_TIMEOUT_SECONDS > 248, (
+        "기본 예산이 관측된 콜드스타트 완주 최대(248s, Ray 061) 아래로 내려왔다 — "
+        "내리려면 그 관측을 반박하는 새 분포가 있어야 한다")
     sdir = root / "ch" / "from-a"
     sdir.mkdir(parents=True)
     (sdir / "001-sig.txt").write_text("ab" * 64 + "\n")
