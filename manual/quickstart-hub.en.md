@@ -383,7 +383,7 @@ tunnel or put the drop on a **neutral host**. Three rules for that case:
 Two small properties worth writing down (0.4.2). The server is dumb but it
 **keeps hygiene** — a quad whose shape is off (3–6 digit number, hex128
 signature, size caps) is refused with 400. And the client timeout defaults to
-300 seconds (0.4.17) — the old 90 came from "cold starts take ~1 min"
+350 seconds (0.4.18) — the old 90 came from "cold starts take ~1 min"
 measurements that all turned out to be ceiling-clipped: with the ceiling
 raised to 400, completed cold starts measured 207–248s across the federation.
 The default sits above the observed completion distribution; narrow a hurried
