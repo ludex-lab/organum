@@ -383,9 +383,10 @@ tunnel or put the drop on a **neutral host**. Three rules for that case:
 Two small properties worth writing down (0.4.2). The server is dumb but it
 **keeps hygiene** — a quad whose shape is off (3–6 digit number, hex128
 signature, size caps) is refused with 400. And the client timeout defaults to
-350 seconds (0.4.18) — the old 90 came from "cold starts take ~1 min"
+420 seconds (0.5.1) — the old 90 came from "cold starts take ~1 min"
 measurements that all turned out to be ceiling-clipped: with the ceiling
-raised to 400, completed cold starts measured 207–248s across the federation.
+raised to 400, completed cold starts measured 207–248s across the federation,
+and later federation samples reached 352.6s.
 The default sits above the observed completion distribution; narrow a hurried
 call with `--timeout` (which, since 0.4.16, reaches the warm-up too). If the
 first request still drops, just send again — re-pushing is a dedup, always
