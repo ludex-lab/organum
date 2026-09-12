@@ -38,13 +38,90 @@ _STATUS_EVENTS = {"board.dormant": "dormant", "board.active": "active",
                   "board.closed": "closed"}
 
 
+def _is_coord(x: Any) -> bool:
+    return (isinstance(x, dict) and isinstance(x.get("lab"), str) and bool(x.get("lab"))
+            and isinstance(x.get("id"), str) and bool(x.get("id")))
+
+
+def shape_problems(ev: Any) -> list[str]:
+    """kind별 **구조**(필수 필드·타입) — reducer가 만지는 필드는 여기서 먼저 확인한다
+    (0.6.0, Orin 041 R2: 유효 서명된 `author: {}` 한 건이 read 전체를 KeyError로 끝냈다).
+    의미(멤버십·좌표·위임)는 validate_event가, 구조는 이 함수가 본다. 둘 다 삭제하지
+    않고 사유를 남기는 입력이다."""
+    if not isinstance(ev, dict):
+        return ["이벤트가 JSON object가 아님(배열·스칼라는 이벤트가 아니다)"]
+    kind = ev.get("kind")
+    if not isinstance(kind, str) or not kind:
+        return ["kind가 없거나 문자열이 아님"]
+    out: list[str] = []
+    if not isinstance(ev.get("at"), str) or not ev["at"]:
+        out.append("at이 없거나 문자열이 아님(정렬 키 — 부재는 배제)")
+    if "signer_lab" in ev and not isinstance(ev["signer_lab"], str):
+        out.append("signer_lab은 문자열")
+    if kind.startswith("board."):
+        if not isinstance(ev.get("board"), str) or not ev["board"]:
+            out.append("board 좌표가 없거나 문자열이 아님")
+        if kind == "board.created" and not _is_coord(ev.get("caretaker")):
+            out.append("caretaker는 {lab, id}")
+        elif kind in _MEMBER_DECISIONS or kind in ("board.join.requested",
+                                                    "board.leave.requested"):
+            if not _is_coord(ev.get("member")):
+                out.append("member는 {lab, id}")
+            if kind in _MEMBER_DECISIONS and "acting_agent" in ev \
+                    and not _is_coord(ev["acting_agent"]):
+                out.append("acting_agent는 {lab, id}")
+        elif kind == "board.metadata":
+            scale = ev.get("scale")
+            if scale is not None and not (isinstance(scale, dict) and all(
+                    v is None or isinstance(v, dict) for v in scale.values())):
+                out.append("scale은 {축: {observed_at, …}|null}")
+            if ev.get("flags") is not None and not isinstance(ev["flags"], dict):
+                out.append("flags는 object")
+        elif kind == "board.post":
+            if not isinstance(ev.get("post_id"), str) or not ev["post_id"]:
+                out.append("post_id는 비어 있지 않은 문자열")
+            if "author" in ev and not _is_coord(ev["author"]):
+                out.append("author는 {lab, id}")
+            if ev.get("reply_to") is not None and not isinstance(ev["reply_to"], str):
+                out.append("reply_to는 문자열 또는 null")
+            if "text" in ev and not isinstance(ev["text"], str):
+                out.append("text는 문자열")
+        elif kind == "board.notice":
+            for k in ("notice_id", "target_post"):
+                if not isinstance(ev.get(k), str) or not ev[k]:
+                    out.append(f"{k}는 비어 있지 않은 문자열")
+    elif kind.startswith("profile."):
+        subject = ev.get("subject")
+        if subject is not None:
+            if not _is_coord(subject):
+                out.append("subject는 {lab, id[, epoch]}")
+            elif "epoch" in subject and (type(subject["epoch"]) is not int
+                                         or subject["epoch"] < 1):
+                out.append("subject.epoch는 양의 정수")
+        if "author" in ev and not _is_coord(ev["author"]):
+            out.append("author는 {lab, id}")
+        if kind in ("profile.announced", "profile.updated"):
+            profile = ev.get("profile")
+            if not isinstance(profile, dict):
+                out.append("profile은 object")
+            elif "kind" in profile and not isinstance(profile["kind"], str):
+                out.append("profile.kind는 문자열(creature|village|lab)")   # 042 R2A
+        if "acting_agent" in ev and not _is_coord(ev["acting_agent"]):
+            out.append("acting_agent는 {lab, id}")
+    return out
+
+
 def validate_event(ev: dict[str, Any]) -> list[str]:
     """계약 위반을 문장으로 돌려준다. 빈 목록 = 계약 안.
 
     검증은 의미층이다 — 서명·digest는 아래층(hub admit/verify-envelope)이 이미
     끝냈다고 가정하고, 여기서는 '유효한 서명 위에서도 성립해야 하는' 계약만 본다.
+    구조(shape_problems)가 어긋나면 그것부터 돌려준다 — reducer가 만질 수 없는 이벤트는
+    의미를 묻기 전에 거부 사유가 선다(0.6.0).
     """
-    problems: list[str] = []
+    problems: list[str] = shape_problems(ev)
+    if problems:
+        return problems
     kind = ev.get("kind", "")
     if kind in _MEMBER_DECISIONS:
         acting = ev.get("acting_agent")
@@ -87,7 +164,8 @@ def project_board(events: list[dict[str, Any]]) -> dict[str, Any]:
         "rejected": [], "last_event_at": None,
     }
     for ev in events:
-        state["last_event_at"] = ev.get("at", state["last_event_at"])
+        if isinstance(ev, dict):
+            state["last_event_at"] = ev.get("at", state["last_event_at"])
         problems = validate_event(ev)
         if problems:
             state["rejected"].append({"event": ev, "why": problems})
@@ -216,7 +294,9 @@ def _delegated_voice_ok(ev: dict[str, Any]) -> bool:
 
 
 def validate_profile_event(ev: dict[str, Any]) -> list[str]:
-    problems: list[str] = []
+    problems: list[str] = shape_problems(ev)
+    if problems:
+        return problems
     kind = ev.get("kind", "")
     subject = ev.get("subject")
     if not subject:
@@ -236,7 +316,7 @@ def validate_profile_event(ev: dict[str, Any]) -> list[str]:
             problems.append(
                 f"화이트리스트 밖 필드 {sorted(extra)} — 공개 선택된 최소만 "
                 "싣는다. 원본은 빌리지에 남는다(계약 §3)")
-        if profile.get("kind") not in SUBJECT_KINDS:
+        if not isinstance(profile.get("kind"), str) or profile["kind"] not in SUBJECT_KINDS:
             problems.append("profile.kind는 creature|village|lab 중 하나여야 "
                             "한다(계약 §1)")
         if subject["lab"] != ev.get("signer_lab") and not ev.get("delegation"):

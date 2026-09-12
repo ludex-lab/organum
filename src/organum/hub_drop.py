@@ -537,6 +537,17 @@ def list_channels(url: str, token: str,
     return _request(url, token, timeout=timeout)
 
 
+def fetch_page(url: str, token: str, since: str = "000",
+               timeout: int = CLIENT_TIMEOUT_SECONDS,
+               stats: dict | None = None) -> dict:
+    """한 문의 한 페이지(`?since=NNN`, PAGE_SIZE) — 0.6.0 bbs_wire의 종류 탐색·재개용.
+    `stats["pages"]`를 1 올린다(회차 GET 계수, Orin 040 §4)."""
+    page = _request(f"{url}?since={since}", token, timeout=timeout)
+    if stats is not None:
+        stats["pages"] = stats.get("pages", 0) + 1
+    return page
+
+
 def pull_quads(url: str, token: str, dest: str | Path,
                since: str | None = None,
                timeout: int = CLIENT_TIMEOUT_SECONDS,
@@ -545,7 +556,13 @@ def pull_quads(url: str, token: str, dest: str | Path,
 
     로컬도 append-only 우편함이다 — 이미 있는 파일은 절대 덮어쓰지 않는다.
 
-    `stats` dict를 주면 워밍 계측(`warm_ms`·`warm_ok`)을 채워 준다."""
+    0.6.0(Ray 101 F1): envelope는 있는데 sig/body가 **빠진** quad는 서버가 다시 주면
+    빠진 파일만 채운다(복구). 남아 있는 파일은 건드리지 않고, 남아 있는 파일의 bytes가
+    서버와 다르면 ValueError로 **명시 오류**(손으로 바뀐 트리를 조용히 고치지 않는다).
+    복구된 번호도 반환 목록에 들어가고 `stats["repaired"]`가 센다.
+
+    `stats` dict를 주면 워밍 계측(`warm_ms`·`warm_ok`)과 정상 응답 페이지 수(`pages`)를
+    채워 준다."""
     if warmup:
         _warm_measured(url, stats, timeout=timeout)
     dest = Path(dest)
@@ -556,23 +573,46 @@ def pull_quads(url: str, token: str, dest: str | Path,
         since = f"{max(have):03d}" if have else "000"
     written: list[str] = []
     while True:
-        page = _request(f"{url}?since={since}", token, timeout=timeout)
+        page = fetch_page(url, token, since, timeout=timeout, stats=stats)
         for q in page["quads"]:
             n = q["n"]
             if not _N_RE.match(n):
                 raise DropError(502, f"서버가 준 n이 형식 위반: {n!r}")
             env_p = dest / f"{n}-envelope.json"
+            sig_p = dest / f"{n}-sig.txt"
+            sig_bytes = (q["sig"] + "\n").encode("utf-8")
+            body_p = body_bytes = None
+            if q.get("body_name"):
+                if not _BODY_NAME_RE.match(q["body_name"]):
+                    raise DropError(502, f"서버가 준 body_name 형식 위반: "
+                                         f"{q['body_name']!r}")
+                body_p = dest / f"{n}-{q['body_name']}"
+                body_bytes = base64.b64decode(q["body_b64"])
             if not env_p.exists():
-                (dest / f"{n}-sig.txt").write_bytes(
-                    (q["sig"] + "\n").encode("utf-8"))
-                if q.get("body_name"):
-                    if not _BODY_NAME_RE.match(q["body_name"]):
-                        raise DropError(502, f"서버가 준 body_name 형식 위반: "
-                                             f"{q['body_name']!r}")
-                    (dest / f"{n}-{q['body_name']}").write_bytes(
-                        base64.b64decode(q["body_b64"]))
-                env_p.write_bytes(base64.b64decode(q["envelope_b64"]))
-            written.append(n)
+                sig_p.write_bytes(sig_bytes)
+                if body_p is not None:
+                    body_p.write_bytes(body_bytes)
+                env_p.write_bytes(base64.b64decode(q["envelope_b64"]))   # 완결 표지는 마지막
+            else:
+                # 완결된 로컬 quad(세 파일 다 있음)는 종전 계약대로 **무접촉**(0.4.x: 이미 받은
+                # 것은 손대지 않는다 — 변조는 read의 서명 검증이 잡는다). **복구가 필요한
+                # quad**(동반 파일이 빠짐)만 042 R3: 남아 있는 파일 전부(envelope 포함)를
+                # 먼저 대조하고, 하나라도 서버 bytes와 다르면 아무것도 쓰지 않고 명시 오류 —
+                # 충돌하는 quad에 복구 성공 표시가 남지 않는다. 대조는 불투명 bytes 동일성.
+                trio = ((env_p, base64.b64decode(q["envelope_b64"]), "envelope"),
+                        (sig_p, sig_bytes, "sig"), (body_p, body_bytes, "body"))
+                missing = [t for t in trio if t[0] is not None and not t[0].exists()]
+                if missing:
+                    for path, want, label in trio:
+                        if path is not None and path.exists() and path.read_bytes() != want:
+                            raise ValueError(
+                                f"{path.name}: 로컬 {label} bytes가 서버와 다르다 — 덮어쓰지 "
+                                "않는다(손으로 바뀐 트리는 사람이 판정한다)")
+                    for path, want, _label in missing:
+                        path.write_bytes(want)
+                    if stats is not None:
+                        stats["repaired"] = stats.get("repaired", 0) + 1
+            written.append(n)                  # 반환 = 페이지에서 본 번호(종전 의미 유지)
             since = n
         if not page.get("more"):
             return written

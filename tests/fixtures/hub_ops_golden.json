@@ -1,0 +1,491 @@
+{
+ "frozen_at": "2026-09-12T00:00:00Z",
+ "machine_id": "m-0123456789abcdef",
+ "platform": "golden-platform",
+ "steps": [
+  {
+   "argv": [
+    "init",
+    "--dir",
+    "hub",
+    "--source-domain",
+    "lab:a/hub"
+   ],
+   "rc": 0,
+   "stdout": "{\"dir\": \"hub\", \"source_domain\": \"lab:a/hub\", \"claims_sha256\": \"f13690c1c31d520fdf06acbc5011ba56c9dbf7407ab260b17204819855fd79f7\"}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "register-key",
+    "--dir",
+    "hub",
+    "--signer",
+    "lab:a",
+    "--key-id",
+    "k1",
+    "--epoch",
+    "1",
+    "--pubkey",
+    "989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f"
+   ],
+   "rc": 0,
+   "stdout": "{\"registered\": \"989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f\", \"signer\": \"lab:a\"}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "register-key",
+    "--dir",
+    "hub",
+    "--signer",
+    "lab:b",
+    "--key-id",
+    "k1",
+    "--epoch",
+    "1",
+    "--pubkey",
+    "56b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967"
+   ],
+   "rc": 0,
+   "stdout": "{\"registered\": \"56b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967\", \"signer\": \"lab:b\"}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "message",
+    "--dir",
+    "hub",
+    "--key",
+    "a.seed",
+    "--signer",
+    "lab:a",
+    "--key-id",
+    "k1",
+    "--epoch",
+    "1",
+    "--to-lab",
+    "lab:b",
+    "--to-id",
+    "Bee",
+    "--to-epoch",
+    "1",
+    "--body-file",
+    "body1.md"
+   ],
+   "rc": 0,
+   "stdout": "{\n \"admitted\": true,\n \"duplicate\": false,\n \"event_id\": \"003f1bcce3e366f69a2dd1a4cadf988b1f240bb85db66526f9b9481c4b83a522\",\n \"accepted_seq\": 1,\n \"authority_projected\": true\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "message",
+    "--dir",
+    "hub",
+    "--key",
+    "a.seed",
+    "--signer",
+    "lab:a",
+    "--key-id",
+    "k1",
+    "--epoch",
+    "1",
+    "--to-lab",
+    "lab:b",
+    "--to-id",
+    "Bee",
+    "--to-epoch",
+    "1",
+    "--body-file",
+    "body1.md"
+   ],
+   "rc": 0,
+   "stdout": "{\n \"admitted\": true,\n \"duplicate\": true,\n \"event_id\": \"003f1bcce3e366f69a2dd1a4cadf988b1f240bb85db66526f9b9481c4b83a522\",\n \"accepted_seq\": 1,\n \"authority_projected\": true\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "export",
+    "--dir",
+    "hub",
+    "--out",
+    "out",
+    "--body",
+    "body1.md"
+   ],
+   "rc": 0,
+   "stdout": "{\"exported\": [\"out/001-envelope.json\", \"out/001-sig.txt\", \"out/001-body.md\"], \"nnn\": \"001\", \"event_id\": \"003f1bcce3e366f69a2dd1a4cadf988b1f240bb85db66526f9b9481c4b83a522\", \"pubkey\": \"989c0b76cb563971fdc9bef31ec06c3560f3249d6ee9e5d83c57625596e05f6f\"}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "out/001-envelope.json",
+    "--sig-file",
+    "out/001-sig.txt",
+    "--body",
+    "body1.md",
+    "--dir",
+    "hub"
+   ],
+   "rc": 0,
+   "stdout": "{\n \"valid_signature\": true,\n \"event_id\": \"003f1bcce3e366f69a2dd1a4cadf988b1f240bb85db66526f9b9481c4b83a522\",\n \"signer\": {\n  \"id\": \"lab:a\",\n  \"key_epoch\": 1,\n  \"key_id\": \"k1\"\n },\n \"event_kind\": \"message.posted\",\n \"target\": {\n  \"lab_id\": \"lab:b\",\n  \"to_epoch\": 1,\n  \"to_id\": \"Bee\"\n },\n \"schema_problems\": [],\n \"body_sha256_match\": true,\n \"key_valid_from_seq\": 0,\n \"key_revoked_at_seq\": null,\n \"ledger_touched\": false\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "out/001-envelope.json",
+    "--sig-file",
+    "out/001-sig.txt",
+    "--body",
+    "body2.md",
+    "--dir",
+    "hub"
+   ],
+   "rc": 1,
+   "stdout": "{\n \"valid_signature\": true,\n \"event_id\": \"003f1bcce3e366f69a2dd1a4cadf988b1f240bb85db66526f9b9481c4b83a522\",\n \"signer\": {\n  \"id\": \"lab:a\",\n  \"key_epoch\": 1,\n  \"key_id\": \"k1\"\n },\n \"event_kind\": \"message.posted\",\n \"target\": {\n  \"lab_id\": \"lab:b\",\n  \"to_epoch\": 1,\n  \"to_id\": \"Bee\"\n },\n \"schema_problems\": [],\n \"body_sha256_match\": false,\n \"key_valid_from_seq\": 0,\n \"key_revoked_at_seq\": null,\n \"ledger_touched\": false\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "out/001-envelope.json",
+    "--sig-file",
+    "bad-sig.txt",
+    "--dir",
+    "hub"
+   ],
+   "rc": 1,
+   "stdout": "{\n \"valid_signature\": false,\n \"event_id\": \"003f1bcce3e366f69a2dd1a4cadf988b1f240bb85db66526f9b9481c4b83a522\",\n \"signer\": {\n  \"id\": \"lab:a\",\n  \"key_epoch\": 1,\n  \"key_id\": \"k1\"\n },\n \"event_kind\": \"message.posted\",\n \"target\": {\n  \"lab_id\": \"lab:b\",\n  \"to_epoch\": 1,\n  \"to_id\": \"Bee\"\n },\n \"schema_problems\": [],\n \"body_sha256_match\": null,\n \"key_valid_from_seq\": 0,\n \"key_revoked_at_seq\": null,\n \"ledger_touched\": false\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "out/001-envelope.json",
+    "--sig-file",
+    "out/001-sig.txt",
+    "--dir",
+    "hub",
+    "--pubkey",
+    "552c630b64b54bf50210c9e253d38bd4949c72e22873500f6285c2bede312a84"
+   ],
+   "rc": 2,
+   "stdout": "",
+   "stderr": "organum-hub: 제공한 pubkey가 registry 결속과 다르다 — registry 989c0b76cb563971…, 제공 552c630b64b54bf5…. 등록 signer는 --pubkey 생략이 안전하다(장부에서 파생)\n"
+  },
+  {
+   "argv": [
+    "message",
+    "--dir",
+    "hub",
+    "--key",
+    "c.seed",
+    "--signer",
+    "lab:c",
+    "--key-id",
+    "k1",
+    "--epoch",
+    "1",
+    "--to-lab",
+    "lab:a",
+    "--to-id",
+    "Ann",
+    "--to-epoch",
+    "1",
+    "--body-file",
+    "body1.md"
+   ],
+   "rc": 1,
+   "stdout": "{\n \"admitted\": false,\n \"duplicate\": false,\n \"event_id\": \"c35cc3a14c3630b00cbb3eda3f066dab594860fc17d0e0369615d8470d6008dd\",\n \"accepted_seq\": null,\n \"authority_projected\": false,\n \"stage\": \"policy\",\n \"problems\": [\n  \"pubkey가 key registry에 없음(self-assertion 불인정)\"\n ]\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "c-env.json",
+    "--sig-file",
+    "c-sig.txt",
+    "--dir",
+    "hub"
+   ],
+   "rc": 2,
+   "stdout": "",
+   "stderr": "organum-hub: 이 signer 좌표는 --dir의 registry에 결속이 없다 — 첫인상(TOFU) 확인이면 --pubkey를 명시하세요(결정이어야 하니까)\n"
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "c-env.json",
+    "--sig-file",
+    "c-sig.txt",
+    "--pubkey",
+    "552c630b64b54bf50210c9e253d38bd4949c72e22873500f6285c2bede312a84"
+   ],
+   "rc": 0,
+   "stdout": "{\n \"valid_signature\": true,\n \"event_id\": \"c35cc3a14c3630b00cbb3eda3f066dab594860fc17d0e0369615d8470d6008dd\",\n \"signer\": {\n  \"id\": \"lab:c\",\n  \"key_epoch\": 1,\n  \"key_id\": \"k1\"\n },\n \"event_kind\": \"message.posted\",\n \"target\": {\n  \"lab_id\": \"lab:a\",\n  \"to_epoch\": 1,\n  \"to_id\": \"Ann\"\n },\n \"schema_problems\": [],\n \"body_sha256_match\": null,\n \"key_valid_from_seq\": null,\n \"key_revoked_at_seq\": null,\n \"ledger_touched\": false\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "c-env.json",
+    "--sig-file",
+    "c-sig.txt",
+    "--dir",
+    "hub",
+    "--pubkey",
+    "552c630b64b54bf50210c9e253d38bd4949c72e22873500f6285c2bede312a84",
+    "--body",
+    "body1.md"
+   ],
+   "rc": 0,
+   "stdout": "{\n \"valid_signature\": true,\n \"event_id\": \"c35cc3a14c3630b00cbb3eda3f066dab594860fc17d0e0369615d8470d6008dd\",\n \"signer\": {\n  \"id\": \"lab:c\",\n  \"key_epoch\": 1,\n  \"key_id\": \"k1\"\n },\n \"event_kind\": \"message.posted\",\n \"target\": {\n  \"lab_id\": \"lab:a\",\n  \"to_epoch\": 1,\n  \"to_id\": \"Ann\"\n },\n \"schema_problems\": [],\n \"body_sha256_match\": true,\n \"key_valid_from_seq\": null,\n \"key_revoked_at_seq\": null,\n \"ledger_touched\": false\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "c-env.json",
+    "--sig-file",
+    "c-sig.txt"
+   ],
+   "rc": 2,
+   "stdout": "",
+   "stderr": "organum-hub: --pubkey 또는 --dir 중 하나는 필요하다\n"
+  },
+  {
+   "argv": [
+    "message",
+    "--dir",
+    "hub",
+    "--key",
+    "b.seed",
+    "--signer",
+    "lab:b",
+    "--key-id",
+    "k1",
+    "--epoch",
+    "1",
+    "--to-lab",
+    "lab:a",
+    "--to-id",
+    "Ann",
+    "--to-epoch",
+    "1",
+    "--body-file",
+    "body1.md"
+   ],
+   "rc": 0,
+   "stdout": "{\n \"admitted\": true,\n \"duplicate\": false,\n \"event_id\": \"d91f915065afaa39f5b3516ca9b77d2e943ec390d8f9889babf043d646d59ad2\",\n \"accepted_seq\": 2,\n \"authority_projected\": true\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "export",
+    "--dir",
+    "hub",
+    "--out",
+    "out",
+    "--body",
+    "body1.md"
+   ],
+   "rc": 0,
+   "stdout": "{\"exported\": [\"out/002-envelope.json\", \"out/002-sig.txt\", \"out/002-body.md\"], \"nnn\": \"002\", \"event_id\": \"d91f915065afaa39f5b3516ca9b77d2e943ec390d8f9889babf043d646d59ad2\", \"pubkey\": \"56b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967\"}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "rotate-key",
+    "--dir",
+    "hub",
+    "--key",
+    "b.seed",
+    "--signer",
+    "lab:b",
+    "--key-id",
+    "k1",
+    "--epoch",
+    "1",
+    "--new-key-id",
+    "k2",
+    "--new-epoch",
+    "2",
+    "--new-pubkey",
+    "2f1b310f4c065331bc0d79ba4661bb9822d67d7c4a1b0a1892e1fd0cd23aa68d"
+   ],
+   "rc": 0,
+   "stdout": "{\n \"admitted\": true,\n \"duplicate\": false,\n \"event_id\": \"525570f5b04e6ba5ad1dc5506e842c916d2ce2aa358468c7c913961484d59a02\",\n \"accepted_seq\": 3,\n \"authority_projected\": true\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "revoke-key",
+    "--dir",
+    "hub",
+    "--key",
+    "b2.seed",
+    "--signer",
+    "lab:b",
+    "--key-id",
+    "k2",
+    "--epoch",
+    "2",
+    "--revoke-key-id",
+    "k1",
+    "--revoke-epoch",
+    "1",
+    "--reason",
+    "scenario"
+   ],
+   "rc": 0,
+   "stdout": "{\n \"admitted\": true,\n \"duplicate\": false,\n \"event_id\": \"977f96369e473dcb2c2b2199e31d837d277a622fde58f31b38a2b7609688f043\",\n \"accepted_seq\": 4,\n \"authority_projected\": true\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "out/002-envelope.json",
+    "--sig-file",
+    "out/002-sig.txt",
+    "--body",
+    "body1.md",
+    "--dir",
+    "hub"
+   ],
+   "rc": 0,
+   "stdout": "{\n \"valid_signature\": true,\n \"event_id\": \"d91f915065afaa39f5b3516ca9b77d2e943ec390d8f9889babf043d646d59ad2\",\n \"signer\": {\n  \"id\": \"lab:b\",\n  \"key_epoch\": 1,\n  \"key_id\": \"k1\"\n },\n \"event_kind\": \"message.posted\",\n \"target\": {\n  \"lab_id\": \"lab:a\",\n  \"to_epoch\": 1,\n  \"to_id\": \"Ann\"\n },\n \"schema_problems\": [],\n \"body_sha256_match\": true,\n \"key_valid_from_seq\": 0,\n \"key_revoked_at_seq\": 5,\n \"ledger_touched\": false\n}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "export",
+    "--dir",
+    "hub",
+    "--out",
+    "out",
+    "--event-id",
+    "d91f915065afaa39f5b3516ca9b77d2e943ec390d8f9889babf043d646d59ad2"
+   ],
+   "rc": 0,
+   "stdout": "{\"exported\": [\"out/003-envelope.json\", \"out/003-sig.txt\"], \"nnn\": \"003\", \"event_id\": \"d91f915065afaa39f5b3516ca9b77d2e943ec390d8f9889babf043d646d59ad2\", \"pubkey\": \"56b328b30c8bf5839e24058747879408bdb36241dc9c2e7c619faa12b2920967\"}\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "export",
+    "--dir",
+    "hub",
+    "--out",
+    "out",
+    "--event-id",
+    "deadbeef"
+   ],
+   "rc": 2,
+   "stdout": "",
+   "stderr": "organum-hub: event_id가 direct-path admitted 이벤트가 아님\n"
+  },
+  {
+   "argv": [
+    "export",
+    "--dir",
+    "hub",
+    "--out",
+    "out",
+    "--body",
+    "nope.md"
+   ],
+   "rc": 2,
+   "stdout": "",
+   "stderr": "organum-hub: body 파일 없음: nope.md\n"
+  },
+  {
+   "argv": [
+    "list",
+    "--dir",
+    "hub"
+   ],
+   "rc": 0,
+   "stdout": "   1  message.posted             lab:a                self           003f1bcce3e366f6…  authority\n   2  message.posted             lab:b                tofu           d91f915065afaa39…  authority\n   3  key.rotated                lab:b                tofu           525570f5b04e6ba5…  authority\n   4  key.revoked                lab:b                tofu           977f96369e473dcb…  authority\n",
+   "stderr": ""
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "out/001-envelope.json",
+    "--sig",
+    "ab",
+    "--sig-file",
+    "out/001-sig.txt"
+   ],
+   "rc": 2,
+   "stdout": "",
+   "stderr": "organum-hub: --sig 또는 --sig-file 중 하나만\n"
+  },
+  {
+   "argv": [
+    "message",
+    "--dir",
+    "hub",
+    "--key",
+    "a.seed",
+    "--signer",
+    "lab:a",
+    "--key-id",
+    "k1",
+    "--epoch",
+    "1",
+    "--to-lab",
+    "lab:b",
+    "--to-id",
+    "Bee",
+    "--to-epoch",
+    "1",
+    "--body-file",
+    "nope.md"
+   ],
+   "rc": 2,
+   "stdout": "",
+   "stderr": "organum-hub: 본문 파일 없음: nope.md\n"
+  },
+  {
+   "argv": [
+    "verify-envelope",
+    "--envelope",
+    "out/001-envelope.json",
+    "--sig-file",
+    "out/001-sig.txt",
+    "--dir",
+    "nohub"
+   ],
+   "rc": 2,
+   "stdout": "",
+   "stderr": "organum-hub: hub 상태가 없음(먼저 init): nohub\n"
+  }
+ ],
+ "files": {
+  "hub/hub.json": "05f6dba3eabcba8850a95041c61b4ed01339ce283e6db5cb5d05c3e8531a5616",
+  "hub/events.jsonl": "d4b0eb7e7f82e8a63401ec2a42f9a8ee77036c5816ddf1365ab58b03dd6713fc",
+  "out/001-body.md": "b3f846a75abb667872e25328d2e4a95877f8e2269db4b86ea8618d54a95ce548",
+  "out/001-envelope.json": "003f1bcce3e366f69a2dd1a4cadf988b1f240bb85db66526f9b9481c4b83a522",
+  "out/001-sig.txt": "e42e667973a1fedc1586665359c2b9493906273be00c8ba53385add8f0b2e834",
+  "out/002-body.md": "b3f846a75abb667872e25328d2e4a95877f8e2269db4b86ea8618d54a95ce548",
+  "out/002-envelope.json": "d91f915065afaa39f5b3516ca9b77d2e943ec390d8f9889babf043d646d59ad2",
+  "out/002-sig.txt": "ad971bbd7643dcb71f9f0bf4a4b81fa1f454346ceecf448c0e77c0eddb4fea3b",
+  "out/003-envelope.json": "d91f915065afaa39f5b3516ca9b77d2e943ec390d8f9889babf043d646d59ad2",
+  "out/003-sig.txt": "ad971bbd7643dcb71f9f0bf4a4b81fa1f454346ceecf448c0e77c0eddb4fea3b",
+  "out/004-envelope.json": "977f96369e473dcb2c2b2199e31d837d277a622fde58f31b38a2b7609688f043",
+  "out/004-sig.txt": "f75531f7a85941de3f8fabb5bd64971689961c109a484086ade688ea8a2145e8"
+ }
+}

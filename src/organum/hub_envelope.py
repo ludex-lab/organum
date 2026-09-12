@@ -400,8 +400,16 @@ def _payload_message_posted(p) -> list:
             problems.append("target.to_epoch는 양의 정수")
     # v0.1 §5: 본문 비탑재 — locator+digest만. 평문 `body` 필드는 위의 exact key set이
     # 구조로 차단한다(별도 검사 불필요 — must-not이 스키마에 내장).
-    if not _HEX64.fullmatch(p.get("body_sha256") or ""):
+    # 0.6.0(Orin 042 R2B): 필드 타입을 정규식 **전에** 본다 — 배열 digest가 TypeError로
+    # 검증기 밖으로 새면 per-quad 격리가 깨진다. 타입 오류도 problem 한 줄이다.
+    bs = p.get("body_sha256")
+    if not (_is_str(bs) and _HEX64.fullmatch(bs)):
         problems.append("body_sha256 hex64 아님")
+    # locator·media_type은 null 허용(0.4.x 계약 — locator_authority=False 세계) — 타입만 본다.
+    for k in ("body_locator", "body_media_type"):
+        v = p.get(k)
+        if v is not None and not _is_str(v):
+            problems.append(f"{k}는 문자열 또는 null")
     return problems
 
 

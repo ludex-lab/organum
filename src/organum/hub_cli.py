@@ -39,12 +39,14 @@ try:
     from organum import hub_drop as hd
     from organum import hub_envelope as he
     from organum import hub_log as hl
+    from organum import hub_ops as ho
     from organum import hub_wire as hw
     from organum import schnorr_pure as sp
 except ImportError:                                    # 스크립트 직접 실행 경로
     import hub_drop as hd
     import hub_envelope as he
     import hub_log as hl
+    import hub_ops as ho
     import hub_wire as hw
     import schnorr_pure as sp
 
@@ -63,67 +65,29 @@ class HubCliError(SystemExit):
 
 
 def _now_z() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    return ho.now_z()
+
+
+def _ops(fn, *args, **kw):
+    """hub_ops 호출의 구조화 오류 → CLI 오류(종전 문구 그대로 stderr, exit 2)."""
+    try:
+        return fn(*args, **kw)
+    except ho.HubOpsError as e:
+        raise HubCliError(str(e))
 
 
 def _read_seed(path) -> bytes:
-    raw = Path(path).read_bytes().strip()
-    try:
-        seed = bytes.fromhex(raw.decode())
-    except (ValueError, UnicodeDecodeError):
-        raise HubCliError(f"seed 파일이 hex64가 아님: {path}")
-    if len(seed) != 32:
-        raise HubCliError(f"seed는 32바이트: {path}")
-    return seed
+    return _ops(ho.read_seed, path)
 
 
-# ── 상태 로드/저장 ───────────────────────────────────────────────────────────
+# ── 상태 로드/저장 — 본체는 hub_ops(0.6.0), 여기는 오류 번역만 ─────────────
 
 def _load(dirpath, *, receipt_seckey=None):
-    d = Path(dirpath)
-    cfg_p = d / "hub.json"
-    if not cfg_p.is_file():
-        raise HubCliError(f"hub 상태가 없음(먼저 init): {d}")
-    cfg = json.loads(cfg_p.read_text(encoding="utf-8"))
-    claims_doc = cfg["claims"]
-    actual = he.canonical_sha(claims_doc)
-    if actual != cfg["claims_sha256"]:
-        raise HubCliError(f"claim registry 드리프트: 기록 {cfg['claims_sha256'][:12]}… "
-                          f"≠ 실제 {actual[:12]}…")
-    keys = he.KeyRegistry()
-    for k in cfg["keys"]:
-        keys.register(k["pubkey"], signer_id=k["signer_id"], key_id=k["key_id"],
-                      key_epoch=k["key_epoch"])
-    hub = he.HubIndex(
-        key_registry=keys,
-        claim_registry=he.ClaimRegistry(claims_doc, expected_sha256=cfg["claims_sha256"]),
-        log=hl.TransparencyLog(), receipt_seckey=receipt_seckey,
-        source_domain=cfg["source_domain"])
-    # 재생 — 로그가 곧 상태. 재생 실패는 로그 손상이므로 크게 멈춘다.
-    log_p = d / "events.jsonl"
-    if log_p.is_file():
-        for i, line in enumerate(log_p.read_text(encoding="utf-8").splitlines(), 1):
-            rec = json.loads(line)
-            if rec["transport"] == "direct":
-                r = hub.admit(rec["raw"].encode("utf-8"), rec["sig"], rec["pubkey"])
-            else:
-                r = hw.admit_wire(hub, rec["event"])
-            if not (r["admitted"] and not r["duplicate"]):
-                raise HubCliError(f"로그 재생 실패(줄 {i}): {r['problems']} — 로그 손상")
-    return d, cfg, hub
+    return _ops(ho.load_hub, dirpath, receipt_seckey=receipt_seckey)
 
 
-def _append(d: Path, rec: dict):
-    with (d / "events.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-
-
-def _admit_and_log(d, hub, raw: bytes, sig_hex: str, pubkey_hex: str) -> dict:
-    r = hub.admit(raw, sig_hex, pubkey_hex)
-    if r["admitted"] and not r["duplicate"]:
-        _append(d, {"transport": "direct", "raw": raw.decode("utf-8"),
-                    "sig": sig_hex, "pubkey": pubkey_hex})
-    return r
+_append = ho.append_record
+_admit_and_log = ho.admit_and_log
 
 
 def _print_result(r: dict):
@@ -138,27 +102,12 @@ def _print_result(r: dict):
 
 
 def _build_envelope(cfg, kind, payload, *, signer, key_id, epoch, subject):
-    # idempotency: 내용에서 결정론 파생 — 같은 주장 재시도는 자연 수렴한다.
-    idem = he.canonical_sha({"kind": kind, "subject": subject, "payload": payload})[:32]
-    return {"envelope_schema": he.ENVELOPE_SCHEMA, "event_kind": kind,
-            "signer": {"id": signer, "key_id": key_id, "key_epoch": epoch},
-            "subject": subject,
-            "provenance": {"lab": signer, "machine": cfg["machine_id"],
-                           "platform": sys.platform, "adapter": "organum-hub-cli/0.3",
-                           "cli_version": None, "capture": None},
-            "idempotency_key": idem, "created_at": _now_z(), "payload": payload}
+    return ho.build_envelope(cfg, kind, payload, signer=signer, key_id=key_id,
+                             epoch=epoch, subject=subject)
 
 
 def _sign_admit(d, cfg, hub, env, seed) -> int:
-    # 재시도 수렴(B1): 같은 idem scope의 최초 결과가 있으면 서명·재기록 없이 그것으로.
-    prior = hub.idem_prior(env["signer"]["id"], env["event_kind"],
-                           env["idempotency_key"])
-    if prior is not None:
-        return _print_result(prior)
-    raw = he.canonical_bytes(env)
-    sig = sp.sign(hashlib.sha256(raw).digest(), seed)
-    return _print_result(_admit_and_log(d, hub, raw, sig.hex(),
-                                        sp.public_key(seed).hex()))
+    return _print_result(ho.sign_and_admit(d, cfg, hub, env, seed))
 
 
 # ── subcommands ──────────────────────────────────────────────────────────────
@@ -263,16 +212,12 @@ def cmd_message(a):
     body_p = Path(a.body_file)
     if not body_p.is_file():
         raise HubCliError(f"본문 파일 없음: {a.body_file}")
-    body = body_p.read_bytes()
-    digest = hashlib.sha256(body).hexdigest()
-    payload = {"target": {"lab_id": a.to_lab, "to_id": a.to_id, "to_epoch": a.to_epoch},
-               "body_locator": a.body_locator or f"file://{body_p.name}",
-               "body_sha256": digest,
-               "body_media_type": a.media_type}
-    subject_id = "message:" + digest[:24]
-    env = _build_envelope(cfg, "message.posted", payload, signer=a.signer,
-                          key_id=a.key_id, epoch=a.epoch,
-                          subject={"type": "message", "id": subject_id})
+    env = ho.build_message_envelope(
+        cfg, signer=a.signer, key_id=a.key_id, epoch=a.epoch,
+        to_lab=a.to_lab, to_id=a.to_id, to_epoch=a.to_epoch,
+        body=body_p.read_bytes(),
+        body_locator=a.body_locator or f"file://{body_p.name}",
+        media_type=a.media_type)
     return _sign_admit(d, cfg, hub, env, seed)
 
 
@@ -288,42 +233,13 @@ def cmd_sign(a):
 
 
 def _registry_pubkey_for(hub, signer) -> str | None:
-    """봉투가 선언한 signer 좌표 (id, key_id, epoch)에 registry가 결속한 pubkey.
-
-    (signer,key_id,epoch) tuple 유일 불변식이 있으므로 있으면 정확히 하나다. 0.4.8
-    (실사고): 운영자가 축약 지문("76b22ede…c51c")에서 키를 재구성해 넘겼고 — 앞 8자와
-    끝 4자만 맞고 가운데 48자가 허구였다 — 여섯 봉투가 "outer 서명 검증 실패"로 떨어져
-    원인 규명에 다섯 단계가 걸렸다. registry가 이미 결속을 쥐고 있는데 사람이 키를
-    다시 치게 하는 설계가 이 사고를 만든다: 등록 signer는 registry에서 파생하고,
-    사람이 준 값은 대조해서 **불일치를 서명 검증 전에 이름으로** 알린다.
-
-    이 술어는 **현재 활성 키**만 본다(admit 전용) — 폐기된 키로 서명된 새 봉투를
-    받아들이면 안 되기 때문이다. 과거 봉투 감사는 다른 질문이므로
-    `_registry_binding_for_audit`을 쓴다(0.4.13, Orin 024 반례)."""
-    b = _registry_binding_for_audit(hub, signer)
-    return b["pubkey"] if b is not None and b["revoked_at_seq"] is None else None
+    """현재 활성 키만(admit 전용) — 본체 hub_ops.registry_pubkey_for(0.4.8·0.4.13)."""
+    return ho.registry_pubkey_for(hub, signer)
 
 
 def _registry_binding_for_audit(hub, signer) -> dict | None:
-    """봉투 signer 좌표의 **exact 결속** — 폐기 여부와 무관하게 돌려준다.
-
-    0.4.13(Orin 024 반례, 우리 손으로 재현): 0.4.12가 `verify-envelope --dir`에
-    admit용 활성키 술어를 그대로 재사용해, **회전·폐기를 지난 과거 봉투를 감사하면
-    "결속이 없다"**로 떨어졌다. registry에는 그 결속이 pubkey·`valid_from_seq`·
-    `revoked_at_seq`까지 멀쩡히 남아 있는데도. 그 결과 감사자는 과거 봉투에 대해
-    다시 손으로 키를 치게 되고 — **그것이 0.4.12가 막으려던 사고 자체다.**
-
-    두 판정은 다른 질문이다: `valid_signature`는 **암호적 사실**(이 bytes를 이 키가
-    서명했는가)이고, 키 lifecycle은 **authority 판정**이다. 봉투에는 accepted_seq가
-    없어 "그때 authority-valid였다"까지는 주장할 수 없으므로, 섞지 않고 나란히
-    보여 준다(호출자가 `key_valid_from_seq`·`key_revoked_at_seq`로 읽는다)."""
-    if not isinstance(signer, dict):
-        return None
-    for b in hub.keys.bindings_of(signer.get("id") or ""):
-        if (b["key_id"] == signer.get("key_id")
-                and b["key_epoch"] == signer.get("key_epoch")):
-            return b
-    return None
+    """exact 결속(폐기 무관, 감사용) — 본체 hub_ops.registry_binding_for_audit."""
+    return ho.registry_binding_for_audit(hub, signer)
 
 
 def cmd_admit(a):
@@ -374,71 +290,21 @@ def cmd_admit(a):
 
 
 def cmd_verify_envelope(a):
-    """장부 무접촉 검증(0.4.5, LxM 제안) — "검증하고 싶었을 뿐인데 장부에 남기는 것
-    말고는 길이 없었다"의 해소. 서명·event_id·스키마 shape·(옵션) body digest·
-    target 표시만 보고, **로그를 전진시키지 않는다**(`ledger_touched: false`).
-
-    0.4.12 — `--dir`로 키를 장부에서 꺼낸다: 0.4.8이 `admit`의 손입력 키를 없앴는데
-    이 도구는 `--pubkey`를 **필수**로 남겨 뒀다. 그래서 "장부를 안 건드리고 확인만"
-    하려던 사람이 정확히 그 순간 신원 재료를 산문이나 기억에서 꺼내게 된다 — 저자인
-    내가 0.4.8 출하 나흘 뒤 같은 사고를 반복했다(축약 지문 `76b22ede…c51c`에서
-    가운데 48자를 지어냈고, 유효한 봉투 두 통이 서명 실패로 떨어졌다).
-    **읽기 전용 replay는 장부 접촉이 아니다**: `--dir`을 주면 registry 결속에서
-    파생하고, `--pubkey`를 함께 주면 대조해 다르면 검증 **전에** 알린다(admit과
-    같은 술어). hub 없는 첫인상(TOFU) 확인은 종전대로 `--pubkey` 단독으로 쓴다."""
+    """장부 무접촉 검증(0.4.5, LxM 제안) — 본체는 hub_ops.verify_quad(0.6.0).
+    `--dir`이면 registry 결속에서 키를 파생하고 `--pubkey`는 대조만(0.4.12·0.4.13);
+    hub 없는 첫인상(TOFU) 확인은 `--pubkey` 단독. 로그를 전진시키지 않는다."""
     if bool(a.sig) == bool(a.sig_file):
         raise HubCliError("--sig 또는 --sig-file 중 하나만")
     sig = a.sig or Path(a.sig_file).read_text(encoding="utf-8").strip()
     env = json.loads(Path(a.envelope).read_text(encoding="utf-8"))
-    raw = he.canonical_bytes(env)
-    pubkey = a.pubkey
-    lifecycle: dict = {"key_valid_from_seq": None, "key_revoked_at_seq": None}
-    if a.dir:
-        _, _, hub = _load(a.dir)                       # 읽기 전용 replay
-        binding = _registry_binding_for_audit(hub, env.get("signer"))
-        reg_pub = binding["pubkey"] if binding else None
-        if binding is not None:
-            lifecycle = {"key_valid_from_seq": binding["valid_from_seq"],
-                         "key_revoked_at_seq": binding["revoked_at_seq"]}
-        if reg_pub is None:
-            if not pubkey:
-                raise HubCliError(
-                    "이 signer 좌표는 --dir의 registry에 결속이 없다 — 첫인상(TOFU) "
-                    "확인이면 --pubkey를 명시하세요(결정이어야 하니까)")
-        elif pubkey and pubkey != reg_pub:
-            raise HubCliError(
-                f"제공한 pubkey가 registry 결속과 다르다 — "
-                f"registry {reg_pub[:16]}…, 제공 {pubkey[:16]}…. "
-                "등록 signer는 --pubkey 생략이 안전하다(장부에서 파생)")
-        else:
-            pubkey = reg_pub
-    elif not pubkey:
-        raise HubCliError("--pubkey 또는 --dir 중 하나는 필요하다")
-    try:
-        sig_ok = sp.verify(bytes.fromhex(sig), hashlib.sha256(raw).digest(),
-                           bytes.fromhex(pubkey))
-    except (ValueError, TypeError):
-        sig_ok = False
-    body_match = None
-    if a.body:
-        want = ((env.get("payload") or {}).get("body_sha256"))
-        body_match = bool(want) and \
-            hashlib.sha256(Path(a.body).read_bytes()).hexdigest() == want
-    out = {"valid_signature": sig_ok,
-           "event_id": he.event_id_of(raw),
-           "signer": env.get("signer"),
-           "event_kind": env.get("event_kind"),
-           "target": ((env.get("payload") or {}).get("target")
-                      if env.get("event_kind") in he.ADDRESSED_KINDS else None),
-           "schema_problems": he.validate_envelope(env),
-           "body_sha256_match": body_match,
-           **lifecycle,
-           "ledger_touched": False}
+    hub = _load(a.dir)[2] if a.dir else None           # 읽기 전용 replay
+    body = Path(a.body).read_bytes() if a.body else None
+    out = _ops(ho.verify_quad, env, sig, hub=hub, pubkey=a.pubkey, body=body)
+    ok = out.pop("ok")
     print(json.dumps(out, ensure_ascii=False, indent=1))
     # 종료코드는 **암호적 사실 + 봉투 무결성**만 본다. 폐기된 키의 과거 봉투도
     # 서명은 참이므로 0이다 — lifecycle은 별도 필드로 읽는다(0.4.13, 판정 분리).
-    return 0 if (sig_ok and not out["schema_problems"]
-                 and body_match in (None, True)) else 1
+    return 0 if ok else 1
 
 
 def cmd_rotate_key(a):
@@ -482,49 +348,11 @@ def cmd_revoke_key(a):
 
 
 def cmd_export(a):
-    """우체통 quad 내보내기 — admitted 이벤트를 transport 폴더 관례
-    (`NNN-envelope.json` + `NNN-sig.txt` [+ `NNN-body*`])로 싼다. events.jsonl에서
-    raw를 손으로 꺼내는 일이 없게 하는, 일반 채널 절차의 발신 절반."""
+    """우체통 quad 내보내기 — 본체는 hub_ops.export_quad(0.6.0): 번호 3~6자리 전체
+    파싱·기존 파일 덮어쓰기 금지·범위 초과 명시 오류(Orin 040 §4 결함 수정)."""
     d, cfg, hub = _load(a.dir)
-    lines = [json.loads(l) for l in
-             (d / "events.jsonl").read_text(encoding="utf-8").splitlines()]
-    if not lines:
-        raise HubCliError("내보낼 admitted 이벤트가 없다")
-    if a.event_id:
-        matches = [r for r in lines if r["transport"] == "direct"
-                   and he.event_id_of(r["raw"].encode("utf-8")) == a.event_id]
-        if not matches:
-            raise HubCliError("event_id가 direct-path admitted 이벤트가 아님")
-        rec = matches[-1]
-    else:
-        rec = lines[-1]
-    if rec["transport"] != "direct":
-        raise HubCliError("wire 경유 이벤트는 wire event JSON을 그대로 전달하라 — "
-                          "quad는 direct-path용")
-    out = Path(a.out)
-    out.mkdir(parents=True, exist_ok=True)
-    used = [int(f.name[:3]) for f in out.iterdir()
-            if f.name[:3].isdigit() and len(f.name) > 3]
-    nnn = f"{(max(used) + 1) if used else 1:03d}"
-    env_p = out / f"{nnn}-envelope.json"
-    sig_p = out / f"{nnn}-sig.txt"
-    # quad는 **바이트 정확**해야 한다 — 텍스트 모드는 Windows에서 \n을 \r\n으로
-    # 번역해 같은 봉투가 랩마다 다른 바이트로 앉는다(Ray 042, 0.4.14).
-    # envelope 쪽은 오늘 무사하지만 그건 canonical JSON이 한 줄이라 번역할 \n이
-    # 없어서일 뿐이다 — 다른 불변식에 기대는 안전이라 함께 바이트로 고정한다.
-    env_p.write_bytes(rec["raw"].encode("utf-8"))
-    sig_p.write_bytes((rec["sig"] + "\n").encode("utf-8"))
-    written = [str(env_p), str(sig_p)]
-    if a.body:
-        body_src = Path(a.body)
-        if not body_src.is_file():
-            raise HubCliError(f"body 파일 없음: {a.body}")
-        body_p = out / f"{nnn}-body{body_src.suffix or '.md'}"
-        body_p.write_bytes(body_src.read_bytes())
-        written.append(str(body_p))
-    print(json.dumps({"exported": written, "nnn": nnn,
-                      "event_id": he.event_id_of(rec["raw"].encode("utf-8")),
-                      "pubkey": rec["pubkey"]}, ensure_ascii=False))
+    r = _ops(ho.export_quad, d, a.out, event_id=a.event_id, body_path=a.body)
+    print(json.dumps(r, ensure_ascii=False))
     return 0
 
 
@@ -698,6 +526,10 @@ def _crashproof_console():
                 pass
 
 
+_WRITE_CMDS = {"register-key", "attest", "message", "admit", "rotate-key",
+               "introduce-signer", "revoke-key", "wire-in"}
+
+
 def main(argv=None) -> int:
     _crashproof_console()
     ap = argparse.ArgumentParser(
@@ -843,6 +675,10 @@ def main(argv=None) -> int:
         sp_.set_defaults(fn=fn)
 
     a = ap.parse_args(argv)
+    # 0.6.0(Orin 041 R1): 원장을 쓰는 명령은 load/replay 전부터 append까지 한 락 아래.
+    if a.cmd in _WRITE_CMDS and getattr(a, "dir", None):
+        with ho.hub_write_lock(a.dir):
+            return a.fn(a)
     return a.fn(a)
 
 
