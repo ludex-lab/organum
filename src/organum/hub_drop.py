@@ -11,6 +11,9 @@
 - 쓰기 접근 = **bearer 토큰**(스팸·낙서 방지일 뿐, 신뢰가 아니다).
 - 읽기 기밀 = **배치**(사설망/TLS/토큰) — 사설 git repo와 같은 노출 등급.
   공개 relay가 아니므로 wire v1의 lab-only 동결 경계와 충돌하지 않는다.
+- 토큰별 **범위**(0.7.0) = URL 경로에 대한 접근 목록. 어느 문에 쓰고 어느 문을 읽는지를 좁힌다.
+  사설 git 저장소의 디렉터리별 권한과 같은 등급이고, 신뢰를 만들지 않는다 — 범위 안에서 올라온
+  봉투도 받는 쪽이 서명을 검증한다. 서버는 여전히 봉투를 열지 않는다.
 
 ## 설계점: 같은 트리를 물화한다
 
@@ -21,19 +24,40 @@ transport_root 스왑만으로 무변경 동작한다.
 ## 프로토콜 — organum-hub/drop/v0
 
 - `POST /v0/<channel>/<from-x>`  body = {"n","envelope_b64","sig"[,"body_name",
-  "body_b64"]} → 200 {"n","stored","dedup"} · 409(같은 n 다른 내용) · 400/401/413
+  "body_b64"]} → 200 {"n","stored","dedup"} · 409(같은 n 다른 내용) · 400/401/413 ·
+  403(토큰의 쓰기 범위 밖 — 아무것도 쓰지 않는다, 0.7.0)
 - `GET  /v0/<channel>/<from-x>?since=NNN` → 200 {"quads":[…], "more"} (n 오름차순,
-  페이지 20; envelope가 마지막에 쓰이므로 미완성 quad는 목록에 나오지 않는다)
+  페이지 20; envelope가 마지막에 쓰이므로 미완성 quad는 목록에 나오지 않는다) ·
+  403(토큰의 읽기 범위 밖, 0.7.0)
 - `GET  /v0/channels` → 200 {"channels": {"<channel>": ["from-x", …], …}} —
   수거기의 문 목록(0.4.9). "채널이 몇 개 있는가"는 서버만 아는데 아무도 물을 수
   없었고, 각 랩이 목록을 기억으로 들다 한 랩이 네 문 중 두 문만 보는 사고가 났다.
   토큰 소지자 전용(예산 1 소비). 정확히 2세그먼트 경로만 예약이라 `channels`라는
   이름의 채널과도 충돌하지 않는다(그 채널의 문은 여전히 3세그먼트).
-- 인증: `Authorization: Bearer <token>` (토큰 파일 한 줄 하나, `#` 주석)
+  0.7.0: 그 토큰이 **읽을 수 있는 문만** 추려서 준다 — 수거기가 이 목록으로 문을 찾는
+  지금의 방식이 그대로 최소 권한 수거가 된다.
+- 인증: `Authorization: Bearer <token>`. 서버의 토큰 파일은 한 줄에 토큰 하나(`#` 주석)이고,
+  0.7.0부터 줄 뒤에 선택 필드를 적는다:
+  `<token>  [id=<이름>]  [write=<문 패턴,…>]  [read=<문 패턴,…>]  [revoked]`
+  - 문 패턴은 `<channel>/<from-x>` · `<channel>/*` · `*/<from-x>` · `*` 넷뿐(정규식 없음).
+  - `write=`도 `read=`도 없는 줄은 **호환 줄**: 0.6.0과 같이 전부 연다(`id=`만 있어도).
+  - 둘 중 하나라도 적으면 **범위 줄**: 적지 않은 축은 권한 없음이다. 전부 허용은 `*`로 적는다.
+  - `revoked` 줄은 언제나 401이고 예산을 먹지 않는다. 감사 기록에는 남는다.
+  - 문법이 틀린 줄·같은 토큰·같은 id가 있으면 서버는 뜨지 않는다. 저장 전에
+    `organum-hub check-tokens`로 확인한다(토큰 값은 찍지 않는다).
+  - 순서는 인증(401) → 빈도 한도(429) → 경로(404) → 범위(403). 범위 밖 요청은 멤버의
+    요청이므로 예산을 쓴다.
 - **발신 규약: 자기 문에만 쓴다** — `from-x`는 x가 쓰는 문이고, 다른 집이 읽게
-  하려면 자기 문에 올리면 된다(각자 pull한다). 서버는 이걸 **막지 않는다**
-  (dumb carrier가 발신자를 판정하기 시작하면 그게 더 나쁘다) — 대신 클라이언트가
-  기본 거부한다(0.4.10 `_check_door`, 실사고 산물).
+  하려면 자기 문에 올리면 된다(각자 pull한다). 서버는 **봉투를 보고 발신자를 판정하지
+  않는다**(dumb carrier가 발신자를 판정하기 시작하면 그게 더 나쁘다) — 클라이언트가
+  기본 거부한다(0.4.10 `_check_door`, 실사고 산물). 0.7.0의 `write=` 범위는 그 위에 한 겹을
+  더한다: 봉투가 아니라 **경로**를 보는 접근 목록이라 0.4.10의 선을 넘지 않는다. 운영자가
+  줄에 범위를 적었을 때만 걸린다.
+- **감사 기록**(0.7.0, `serve --audit-log <디렉터리>`): 인증된 요청마다 줄 구분 JSON 한 줄
+  (utc·id·method·status·src·channel·door·since|n·envelope_sha256·stored·dedup). 운반 트리
+  **밖**이어야 하고(안이면 뜨지 않는다), 본문·봉투 내용·토큰 값·출발지 주소 그대로는 적지 않는다
+  (`src`는 주소의 지문). 응답을 보낸 **뒤에** 쓰고 실패해도 삼킨다 — 부가 기록의 실패가 저장된
+  전송을 실패로 보이게 하지 않는다. 모르는 토큰의 401은 남기지 않는다. 탐지이지 예방이 아니다.
 - 토큰(=멤버)별 rate limit: 초과는 429 + `Retry-After` 초. hosted(gated) 티어의
   비용 유계 조건 — 인증 실패(401)는 멤버가 아니므로 예산을 먹지 않고, 인증 전
   플러드 방어는 배치 층(에지/방화벽) 몫이다.
@@ -97,11 +121,14 @@ CLIENT_TIMEOUT_SECONDS = 420
 # 워밍 실패는 여전히 본 호출을 막지 않으므로 보험의 성질은 그대로다.
 WARMUP_TIMEOUT_SECONDS = CLIENT_TIMEOUT_SECONDS
 
-_CHANNEL_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-_SENDER_RE = re.compile(r"^from-[a-z0-9][a-z0-9-]{0,63}$")
-_N_RE = re.compile(r"^[0-9]{3,6}$")
-_SIG_RE = re.compile(r"^[0-9a-f]{128}$")
-_BODY_NAME_RE = re.compile(r"^body\.[a-z0-9]{1,8}$")
+# 끝 닻은 `\Z`다. `$`는 문자열 끝의 줄바꿈 **앞**에서도 맞아서, `re.match`와 함께 쓰면 "값 + LF"가
+# 통과한다(0.7.0, Jdot HQ 보고 2026-10-04): LF 붙은 sig는 저장된 뒤 같은 bundle 재전송이 409가 됐고,
+# LF 붙은 n은 파일 이름에 줄바꿈을 넣어 같은 번호의 정상 quad와 나란히 저장됐다(409 보호 우회).
+_CHANNEL_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\Z")
+_SENDER_RE = re.compile(r"^from-[a-z0-9][a-z0-9-]{0,63}\Z")
+_N_RE = re.compile(r"^[0-9]{3,6}\Z")
+_SIG_RE = re.compile(r"^[0-9a-f]{128}\Z")
+_BODY_NAME_RE = re.compile(r"^body\.[a-z0-9]{1,8}\Z")
 
 
 class DropError(Exception):
@@ -112,23 +139,138 @@ class DropError(Exception):
         self.status = status
 
 
-def load_tokens(path: str | Path) -> list[str]:
+_TOKEN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\Z")
+_SCOPE_ALL = ("*",)
+
+
+class TokenEntry:
+    """토큰 파일의 한 줄(0.7.0). `write`/`read`는 문 패턴의 튜플.
+
+    - **호환 줄**: `write=`도 `read=`도 없는 줄. 0.6.0과 같이 전부 연다(`id=`만 있어도 호환 줄이다).
+    - **범위 줄**: 둘 중 하나라도 적은 줄. 적지 않은 축은 **권한 없음**이다 — `read=`만 적은 토큰이
+      전체 쓰기를 얻지 않는다. 전부 허용은 `*`로 명시한다.
+    - **폐기 줄**: `revoked` 표시. 언제나 401이고, 감사 기록에 `id`와 함께 한 줄 남는다
+      (폐기한 토큰이 다시 쓰이는 것이 유출의 가장 확실한 증거다 — LxM 118)."""
+
+    __slots__ = ("token", "id", "write", "read", "revoked", "legacy")
+
+    def __init__(self, token, id, write, read, revoked, legacy):
+        self.token, self.id, self.write, self.read = token, id, write, read
+        self.revoked, self.legacy = revoked, legacy
+
+    def allows(self, axis: str, channel: str, door: str) -> bool:
+        return any(_pattern_allows(p, channel, door) for p in getattr(self, axis))
+
+    def describe(self) -> dict:
+        """토큰 값 없는 요약(검사 명령·기동 출력용)."""
+        mode = "revoked" if self.revoked else ("legacy" if self.legacy else "scoped")
+        none = self.revoked                     # 폐기 줄은 아무것도 열지 않는다
+        return {"id": self.id, "mode": mode, "write": [] if none else list(self.write),
+                "read": [] if none else list(self.read)}
+
+
+def _pattern_allows(pattern: str, channel: str, door: str) -> bool:
+    if pattern == "*":
+        return True
+    ch, dr = pattern.split("/", 1)
+    return ch in ("*", channel) and dr in ("*", door)
+
+
+def _parse_patterns(value: str) -> tuple:
+    """`<channel>/<from-x>` · `<channel>/*` · `*/<from-x>` · `*`. 정규식은 받지 않는다."""
+    out = []
+    for item in value.split(","):
+        if item == "*":
+            out.append(item)
+            continue
+        ch, sep, dr = item.partition("/")
+        if not (sep and (ch == "*" or _CHANNEL_RE.match(ch))
+                and (dr == "*" or _SENDER_RE.match(dr)) and (ch, dr) != ("*", "*")):
+            raise ValueError("문 패턴은 <channel>/<from-x> · <channel>/* · */<from-x> · * 가운데 하나")
+        out.append(item)
+    return tuple(out)
+
+
+def load_token_entries(path: str | Path) -> list[TokenEntry]:
+    """서버용 토큰 파일 파서(0.7.0). 한 줄 = `<token> [id=…] [write=…] [read=…] [revoked]`.
+
+    문법이 틀린 줄이 하나라도 있으면 ValueError — 서버는 뜨지 않는다(열린 채로 뜨는 것보다 낫다).
+    **오류 문구에 줄의 내용을 싣지 않는다**: 틀린 줄의 조각이 토큰일 수 있다."""
+    entries: list[TokenEntry] = []
     lines = Path(path).read_text(encoding="utf-8").splitlines()
-    toks = [l.strip() for l in lines if l.strip() and not l.strip().startswith("#")]
+    for lineno, raw in enumerate(lines, 1):
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        token, fields = parts[0], parts[1:]
+        id_ = None
+        scope: dict = {}
+        revoked = False
+        try:
+            for f in fields:
+                if f == "revoked":
+                    if revoked:
+                        raise ValueError("revoked가 두 번")
+                    revoked = True
+                    continue
+                key, sep, value = f.partition("=")
+                if not sep or key not in ("id", "write", "read") or not value:
+                    raise ValueError("알 수 없는 필드이거나 값이 비었다(필드는 id= · write= · read= · revoked)")
+                if key == "id":
+                    if id_ is not None:
+                        raise ValueError("id가 두 번")
+                    if not _TOKEN_ID_RE.match(value):
+                        raise ValueError("id는 [a-z0-9][a-z0-9-]{0,63}")
+                    id_ = value
+                else:
+                    if key in scope:
+                        raise ValueError(f"{key}가 두 번")
+                    scope[key] = _parse_patterns(value)
+        except ValueError as e:
+            raise ValueError(f"토큰 파일 {lineno}번째 줄: {e}") from None
+        legacy = not scope
+        entries.append(TokenEntry(
+            token=token,
+            id=id_ or hashlib.sha256(token.encode("utf-8")).hexdigest()[:16],
+            write=_SCOPE_ALL if legacy else scope.get("write", ()),
+            read=_SCOPE_ALL if legacy else scope.get("read", ()),
+            revoked=revoked, legacy=legacy))
+    if not entries:
+        raise ValueError(f"토큰 파일이 비어 있다: {path} — 열린 우체통은 만들지 않는다")
+    if not any(not e.revoked for e in entries):
+        raise ValueError(f"쓸 수 있는 토큰이 없다(전부 revoked): {path}")
+    for attr, label in (("token", "같은 토큰이 두 줄에 있다"), ("id", "같은 id가 두 줄에 있다")):
+        seen: set = set()
+        for e in entries:
+            v = getattr(e, attr)
+            if v in seen:
+                raise ValueError(f"토큰 파일: {label}")
+            seen.add(v)
+    return entries
+
+
+def load_tokens(path: str | Path) -> list[str]:
+    """토큰 **값**만 — 클라이언트(`push`·`pull`·`channels`)가 쓴다. 줄의 첫 조각이 토큰이다
+    (0.7.0: 서버용 범위 필드가 붙은 줄도 읽는다. 클라이언트는 필드를 해석하지 않는다)."""
+    lines = Path(path).read_text(encoding="utf-8").splitlines()
+    toks = [l.split()[0] for l in lines if l.strip() and not l.strip().startswith("#")]
     if not toks:
         raise ValueError(f"토큰 파일이 비어 있다: {path} — 열린 우체통은 만들지 않는다")
     return toks
 
 
-def _token_match(tokens: list[str], header: str | None) -> str | None:
-    """일치한 토큰을 돌려준다(없으면 None) — rate limit이 멤버 단위로 키를 잡도록."""
+def _token_match(entries: list[TokenEntry], header: str | None) -> TokenEntry | None:
+    """일치한 토큰 줄을 돌려준다(없으면 None) — rate limit·범위·감사가 멤버 단위로 키를 잡도록.
+    전 줄을 끝까지 비교한다(먼저 맞은 줄에서 멈추지 않는다 — 줄 위치가 시간으로 새지 않게)."""
     if not header or not header.startswith("Bearer "):
         return None
     given = header[len("Bearer "):].strip()
-    for t in tokens:
-        if hmac.compare_digest(given, t):
-            return t
-    return None
+    hit = None
+    for e in entries:
+        if hmac.compare_digest(given.encode("utf-8"), e.token.encode("utf-8")) and hit is None:
+            hit = e
+    return hit
 
 
 class RateLimiter:
@@ -237,11 +379,23 @@ def _split_path(path: str) -> tuple[str, str] | None:
     return channel, sender
 
 
+def _filter_tree(tree: dict, entry: TokenEntry) -> dict:
+    """문 목록을 읽기 범위로 추린다 — 읽을 수 없는 문은 이름도 보이지 않는다."""
+    out = {}
+    for ch, doors in tree.items():
+        keep = [d for d in doors if entry.allows("read", ch, d)]
+        if keep:
+            out[ch] = keep
+    return out
+
+
 class _DropHandler(BaseHTTPRequestHandler):
     server_version = "organum-hub-drop/0"
     root: Path
-    tokens: list[str]
+    entries: list
     limiter: RateLimiter
+    audit_dir = None            # Path | None — 운반 트리 밖(make_server가 보증)
+    now = staticmethod(time.time)
 
     def _send(self, status: int, obj: dict, headers: dict | None = None):
         raw = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -253,42 +407,86 @@ class _DropHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
-    def _auth(self) -> str | None:
-        """인증 → rate limit. 실패 시 응답까지 보내고 None, 통과면 토큰.
+    # ── 감사 기록(0.7.0) ──
+    def _source(self) -> str:
+        """요청 출발지의 **지문**(주소 그대로가 아니다). 프록시 뒤 배치를 위해
+        `X-Forwarded-For`의 첫 주소를 먼저 본다. 같은 출발지인지 다른 출발지인지를 가리는 용도다."""
+        fwd = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+        addr = fwd or (self.client_address[0] if self.client_address else "")
+        return hashlib.sha256(addr.encode("utf-8", "replace")).hexdigest()[:16]
+
+    def _audit(self, entry: TokenEntry, status: int, **fields) -> None:
+        """인증된(또는 폐기 토큰의) 요청 한 줄. **응답을 보낸 뒤에** 부르고, 실패해도 삼킨다 —
+        감사 기록 실패가 이미 저장된 전송을 실패로 보이게 해서는 안 된다(Jdot HQ 검토).
+        본문·봉투 내용·토큰 값은 적지 않는다."""
+        if self.audit_dir is None:
+            return
+        try:
+            t = time.gmtime(self.now())
+            line = {"utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", t), "id": entry.id,
+                    "method": self.command, "status": status, "src": self._source()}
+            line.update({k: v for k, v in fields.items() if v is not None})
+            path = self.audit_dir / f"audit-{time.strftime('%Y%m%d', t)}.jsonl"
+            with open(path, "a", encoding="utf-8", newline="\n") as f:   # Windows에서도 LF 한 글자
+                f.write(json.dumps(line, ensure_ascii=False, sort_keys=True) + "\n")
+        except Exception as e:                    # noqa: BLE001 — 감사는 운반을 막지 않는다
+            self.log_error("audit write failed: %s", type(e).__name__)
+
+    def _auth(self) -> TokenEntry | None:
+        """인증 → rate limit. 실패 시 응답까지 보내고 None, 통과면 토큰 줄.
 
         순서가 계약이다: 인증 실패(401)는 limiter 호출 **전**에 반환 — 멤버가
-        아니면 예산을 먹지 않는다(무인증 워밍 GET이 공짜인 근거, 0.4.6)."""
-        token = _token_match(self.tokens, self.headers.get("Authorization"))
-        if token is None:
+        아니면 예산을 먹지 않는다(무인증 워밍 GET이 공짜인 근거, 0.4.6).
+        폐기 줄도 401이고 예산을 먹지 않는다. 다만 감사 줄은 남긴다(0.7.0)."""
+        entry = _token_match(self.entries, self.headers.get("Authorization"))
+        if entry is None:
             self._send(401, {"error": "bearer 토큰 필요"})
             return None
-        retry = self.limiter.check(token)
+        if entry.revoked:
+            self._send(401, {"error": "bearer 토큰 필요"})
+            self._audit(entry, 401, revoked=True, path=self.path.split("?", 1)[0])
+            return None
+        retry = self.limiter.check(entry.token)
         if retry is not None:
             self._send(429, {"error": f"rate limit — {retry}초 뒤에"},
                        headers={"Retry-After": str(retry)})
+            self._audit(entry, 429, path=self.path.split("?", 1)[0])
             return None
-        return token
+        return entry
 
-    def _gate(self) -> tuple[str, str] | None:
-        """인증 → rate limit → 경로 순. 실패 시 응답까지 보내고 None."""
-        if self._auth() is None:
+    def _gate(self, axis: str) -> tuple | None:
+        """인증 → rate limit → 경로 → 범위 순. 실패 시 응답까지 보내고 None.
+        통과면 (토큰 줄, channel, door)."""
+        entry = self._auth()
+        if entry is None:
             return None
         path = self.path.split("?", 1)[0]
         loc = _split_path(path)
         if loc is None:
             self._send(404, {"error": "경로는 /v0/<channel>/<from-x>"})
+            self._audit(entry, 404, path=path)
             return None
-        return loc
+        if not entry.allows(axis, loc[0], loc[1]):
+            # 범위 밖(0.7.0): 아무것도 쓰지 않고 읽어 주지 않는다. 봉투를 열어 본 판정이 아니라
+            # **경로**에 대한 접근 목록이다 — 발신자 판정은 여전히 수신 hub의 admit 몫이다.
+            label = "쓰기" if axis == "write" else "읽기"
+            self._send(403, {"error": f"이 토큰의 {label} 범위 밖"})
+            self._audit(entry, 403, channel=loc[0], door=loc[1])
+            return None
+        return entry, loc[0], loc[1]
 
     def do_GET(self):  # noqa: N802 — BaseHTTPRequestHandler 계약
         if self.path.split("?", 1)[0] == "/v0/channels":
-            if self._auth() is None:
+            entry = self._auth()
+            if entry is None:
                 return
-            self._send(200, {"channels": _channel_tree(self.root)})
+            self._send(200, {"channels": _filter_tree(_channel_tree(self.root), entry)})
+            self._audit(entry, 200, op="channels")
             return
-        loc = self._gate()
-        if loc is None:
+        gate = self._gate("read")
+        if gate is None:
             return
+        entry, channel, door = gate
         since = "000"
         if "?" in self.path:
             q = dict(p.split("=", 1) for p in
@@ -296,8 +494,9 @@ class _DropHandler(BaseHTTPRequestHandler):
             since = q.get("since", "000")
             if not _N_RE.match(since) and since != "000":
                 self._send(400, {"error": "since는 3~6자리 숫자"})
+                self._audit(entry, 400, channel=channel, door=door)
                 return
-        dirp = self.root / loc[0] / loc[1]
+        dirp = self.root / channel / door
         ns = []
         if dirp.is_dir():
             ns = sorted({f.name.split("-", 1)[0] for f in dirp.glob("*-envelope.json")
@@ -305,25 +504,32 @@ class _DropHandler(BaseHTTPRequestHandler):
         fresh = [n for n in ns if int(n) > int(since)]
         quads = [b for n in fresh[:PAGE_SIZE] if (b := _quad_files(dirp, n))]
         self._send(200, {"quads": quads, "more": len(fresh) > PAGE_SIZE})
+        self._audit(entry, 200, channel=channel, door=door, since=since, quads=len(quads))
 
     def do_POST(self):  # noqa: N802
-        loc = self._gate()
-        if loc is None:
+        gate = self._gate("write")
+        if gate is None:
             return
+        entry, channel, door = gate
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
         if length <= 0 or length > REQUEST_MAX_BYTES:
             self._send(413, {"error": f"요청은 1..{REQUEST_MAX_BYTES} 바이트"})
+            self._audit(entry, 413, channel=channel, door=door)
             return
         try:
             n, env_b, sig, body_name, body_b = _validate_bundle(
                 json.loads(self.rfile.read(length).decode("utf-8")))
         except (ValueError, UnicodeDecodeError) as e:
             self._send(400, {"error": str(e)})
+            self._audit(entry, 400, channel=channel, door=door)
             return
-        dirp = self.root / loc[0] / loc[1]
+        # 봉투 **바이트**의 지문 — 봉투를 열지 않는다. 409로 거부된 시도는 내용이 남지 않으므로,
+        # 무엇을 올리려 했는지는 이 지문으로만 남는다(LxM 099 §3(b)·118).
+        env_sha = hashlib.sha256(env_b).hexdigest()
+        dirp = self.root / channel / door
         dirp.mkdir(parents=True, exist_ok=True)
         env_p = dirp / f"{n}-envelope.json"
         if env_p.is_file() and env_p.read_bytes():
@@ -335,9 +541,13 @@ class _DropHandler(BaseHTTPRequestHandler):
                          base64.b64decode(prior["body_b64"] or "") == body_b))
             if same:
                 self._send(200, {"n": n, "stored": True, "dedup": True})
+                self._audit(entry, 200, channel=channel, door=door, n=n,
+                            envelope_sha256=env_sha, stored=True, dedup=True)
             else:
                 self._send(409, {"error": f"{n}은 이미 다른 내용으로 존재 — "
                                           "먼저 쓴 것이 남는다"})
+                self._audit(entry, 409, channel=channel, door=door, n=n,
+                            envelope_sha256=env_sha, stored=False)
             return
         # 쓰기 순서: sig·body 먼저, envelope 마지막 — envelope가 완성 표지
         (dirp / f"{n}-sig.txt").write_bytes((sig + "\n").encode("utf-8"))
@@ -345,16 +555,29 @@ class _DropHandler(BaseHTTPRequestHandler):
             (dirp / f"{n}-{body_name}").write_bytes(body_b)
         env_p.write_bytes(env_b)
         self._send(200, {"n": n, "stored": True, "dedup": False})
+        self._audit(entry, 200, channel=channel, door=door, n=n,
+                    envelope_sha256=env_sha, stored=True, dedup=False)
 
 
 def make_server(root: str | Path, token_file: str | Path,
                 bind: str = "127.0.0.1", port: int = 8642,
                 rate_limit_per_minute: int = RATE_LIMIT_PER_MINUTE,
-                clock=time.monotonic) -> HTTPServer:
-    tokens = load_tokens(token_file)
+                clock=time.monotonic, audit_dir: str | Path | None = None,
+                now=time.time) -> HTTPServer:
+    entries = load_token_entries(token_file)
+    root_p = Path(root)
+    audit_p = None
+    if audit_dir is not None:
+        audit_p = Path(audit_dir).resolve()
+        root_r = root_p.resolve()
+        if audit_p == root_r or root_r in audit_p.parents:
+            # 감사 기록이 운반 트리 안에 있으면 드롭으로 읽힌다 — 뜨지 않는다.
+            raise ValueError("감사 디렉터리는 운반 트리(--root) 밖이어야 한다")
+        audit_p.mkdir(parents=True, exist_ok=True)
     handler = type("Handler", (_DropHandler,),
-                   {"root": Path(root), "tokens": tokens,
-                    "limiter": RateLimiter(rate_limit_per_minute, clock=clock)})
+                   {"root": root_p, "entries": entries,
+                    "limiter": RateLimiter(rate_limit_per_minute, clock=clock),
+                    "audit_dir": audit_p, "now": staticmethod(now)})
     return HTTPServer((bind, port), handler)
 
 

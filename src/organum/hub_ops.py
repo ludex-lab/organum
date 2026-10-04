@@ -53,7 +53,7 @@ except ImportError:                                    # 스크립트 직접 실
 
 ADAPTER = "organum-hub-cli/0.3"
 LOCK_FILE = ".write.lock"                          # 상태 디렉터리 안, 원장 밖
-_QUAD_N_RE = re.compile(r"^[0-9]{3,6}$")
+_QUAD_N_RE = re.compile(r"^[0-9]{3,6}\Z")       # `$`가 아니라 `\Z` — hub_drop의 같은 수정(0.7.0)
 QUAD_N_MAX = 999999
 
 

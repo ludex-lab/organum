@@ -12,6 +12,7 @@
     organum-hub prove --dir hub --event-id …      # 포함 증명 → verify-proof로 오프라인 검증
     organum-hub rotate-key / revoke-key / was-valid                        # key lifecycle
     organum-hub serve / push / pull / channels    # git 없는 전달 — HTTP 우체통(drop v0)
+    organum-hub check-tokens --token-file …       # 서버용 토큰 파일 검사(범위·id, 값은 안 찍음)
 
 ## 상태 모델 — 로그가 곧 상태다
 
@@ -461,17 +462,34 @@ def cmd_serve(a):
     기본 60/분(hosted 비용 유계) — self-host P2P는 --rate-limit 0으로 꺼도 된다."""
     try:
         srv = hd.make_server(a.root, a.token_file, bind=a.bind, port=a.port,
-                             rate_limit_per_minute=a.rate_limit)
+                             rate_limit_per_minute=a.rate_limit, audit_dir=a.audit_log)
     except (ValueError, OSError) as e:
         raise HubCliError(str(e))
+    entries = srv.RequestHandlerClass.entries
     print(json.dumps({"profile": hd.DROP_PROFILE, "root": str(Path(a.root)),
                       "bind": a.bind, "port": srv.server_address[1],
-                      "rate_limit_per_minute": a.rate_limit},
+                      "rate_limit_per_minute": a.rate_limit,
+                      "audit_log": str(Path(a.audit_log)) if a.audit_log else None,
+                      "tokens": {m: sum(1 for e in entries if e.describe()["mode"] == m)
+                                 for m in ("legacy", "scoped", "revoked")}},
                      ensure_ascii=False), flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         return 0
+    return 0
+
+
+def cmd_check_tokens(a):
+    """서버용 토큰 파일 검사(0.7.0, LxM 118) — **저장·재배포 전에** 돌린다. 문법이 틀린 줄이
+    있으면 서버가 뜨지 않으므로, 오타 하나가 드롭 전체를 세우기 전에 여기서 잡는다.
+    토큰 값은 찍지 않는다. 줄마다 id·모드·범위만 보인다. 오프라인이다."""
+    try:
+        entries = hd.load_token_entries(a.token_file)
+    except (ValueError, OSError) as e:
+        raise HubCliError(str(e))
+    print(json.dumps({"ok": True, "entries": [e.describe() for e in entries]},
+                     ensure_ascii=False, indent=1))
     return 0
 
 
@@ -600,7 +618,9 @@ def main(argv=None) -> int:
                               ("--port", {"type": int, "default": 8642}),
                               ("--rate-limit",
                                {"type": int,
-                                "default": hd.RATE_LIMIT_PER_MINUTE})]),
+                                "default": hd.RATE_LIMIT_PER_MINUTE}),
+                              ("--audit-log", {"default": None})]),
+        ("check-tokens", cmd_check_tokens, [("--token-file", {"required": True})]),
         ("push", cmd_push, [("--url", {"required": True}),
                             ("--quad", {"required": True}),
                             ("--token-file", {"required": True}),
