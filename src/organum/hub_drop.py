@@ -73,7 +73,9 @@ import hashlib
 import hmac
 import json
 import math
+import os
 import re
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -86,6 +88,13 @@ ENVELOPE_MAX_BYTES = 65536          # hub_wire CONTENT_MAX_BYTES와 같은 값
 BODY_MAX_BYTES = 1_048_576
 REQUEST_MAX_BYTES = 2 * 1_048_576
 PAGE_SIZE = 20
+# ── 상태 칸·문 색인·표지(0.8.0) — 설계: docs/hub-state-snapshot-restore-reconcile-v0-design.md §8.1
+STATE_MAX_BYTES = 1_048_576         # 묶음의 한도 기본값 — 압축한, 곧 저장되는 바이트(--state-max-bytes)
+STATE_KEEP = 3                      # 남기는 세대 수의 기본(--state-keep)
+STATE_MAX_JUMP = 10_000             # floor_generation이 지금 세대를 넘을 수 있는 폭의 기본(--state-max-jump)
+STATE_GENERATION_MAX = 99_999_999   # 세대 파일의 이름이 여덟 자리다
+INDEX_PAGE_SIZE = 1000              # 문 색인의 한 쪽 — 항목 하나가 250바이트쯤이다(LxM 123 §5)
+_STATE_REQUEST_OVERHEAD = 1024      # POST /v0/state에서 묶음을 감싼 것의 여유(실측 343바이트, LxM 124 §4)
 RATE_LIMIT_PER_MINUTE = 60          # 토큰별 기본값 — 0이면 끔(self-host P2P용)
 _WINDOW_SECONDS = 60.0
 # 기본 예산의 출처(0.4.17, Ray 061): "콜드스타트 ~1분"은 천장에 잘린 값이었다 —
@@ -129,6 +138,8 @@ _SENDER_RE = re.compile(r"^from-[a-z0-9][a-z0-9-]{0,63}\Z")
 _N_RE = re.compile(r"^[0-9]{3,6}\Z")
 _SIG_RE = re.compile(r"^[0-9a-f]{128}\Z")
 _BODY_NAME_RE = re.compile(r"^body\.[a-z0-9]{1,8}\Z")
+_SHA_RE = re.compile(r"^[0-9a-f]{64}\Z")
+_STATE_FILE_RE = re.compile(r"^([0-9]{8})\.state\Z")
 
 
 class DropError(Exception):
@@ -152,11 +163,13 @@ class TokenEntry:
     - **폐기 줄**: `revoked` 표시. 언제나 401이고, 감사 기록에 `id`와 함께 한 줄 남는다
       (폐기한 토큰이 다시 쓰이는 것이 유출의 가장 확실한 증거다 — LxM 118)."""
 
-    __slots__ = ("token", "id", "write", "read", "revoked", "legacy")
+    __slots__ = ("token", "id", "write", "read", "revoked", "legacy", "explicit_id")
 
-    def __init__(self, token, id, write, read, revoked, legacy):
+    def __init__(self, token, id, write, read, revoked, legacy, explicit_id=False):
         self.token, self.id, self.write, self.read = token, id, write, read
         self.revoked, self.legacy = revoked, legacy
+        # 줄에 `id=`를 적었는가(0.8.0). 상태 칸의 이름은 적은 id만 된다 — 서버가 대신 만든 id는 아니다.
+        self.explicit_id = explicit_id
 
     def allows(self, axis: str, channel: str, door: str) -> bool:
         return any(_pattern_allows(p, channel, door) for p in getattr(self, axis))
@@ -235,7 +248,7 @@ def load_token_entries(path: str | Path) -> list[TokenEntry]:
             id=id_ or hashlib.sha256(token.encode("utf-8")).hexdigest()[:16],
             write=_SCOPE_ALL if legacy else scope.get("write", ()),
             read=_SCOPE_ALL if legacy else scope.get("read", ()),
-            revoked=revoked, legacy=legacy))
+            revoked=revoked, legacy=legacy, explicit_id=id_ is not None))
     if not entries:
         raise ValueError(f"토큰 파일이 비어 있다: {path} — 열린 우체통은 만들지 않는다")
     if not any(not e.revoked for e in entries):
@@ -369,6 +382,148 @@ def _channel_tree(root: Path) -> dict[str, list[str]]:
     return tree
 
 
+# ── 상태 칸(0.8.0) ────────────────────────────────────────────────────────────
+#
+# 한 세대 = 파일 하나: `<state-dir>/<id>/NNNNNNNN.state`. 첫 줄이 머리(JSON 한 줄), 그 뒤가 묶음의
+# 바이트다. 서버는 묶음을 열지 않는다. 바뀌는 포인터 파일이 없다 — 지금 세대는 완결된 것 가운데
+# 번호가 가장 큰 것이고, **요청마다** 디렉터리에서 읽는다(감독기가 놓은 세대도 다음 요청부터 보인다).
+
+def _state_header(path: Path) -> dict | None:
+    """세대 파일의 머리. 번호·지문·길이가 모양에 맞고 바이트의 길이가 머리와 같을 때만 돌려준다 —
+    쓰다 끊긴 파일이나 손댄 파일은 세지 않는다. 지문은 여기서 다시 계산하지 않는다(내줄 때 본다)."""
+    m = _STATE_FILE_RE.match(path.name)
+    if not m:
+        return None
+    try:
+        with open(path, "rb") as f:
+            line = f.readline(8192)
+        if not line.endswith(b"\n"):
+            return None
+        h = json.loads(line.decode("utf-8"))
+        if not isinstance(h, dict):
+            return None
+        gen, size = h.get("generation"), h.get("size")
+        prev_gen, prev_sha = h.get("prev_generation"), h.get("prev_sha256")
+        if not (type(gen) is int and gen == int(m.group(1)) and gen >= 1
+                and type(size) is int and size >= 0
+                and type(prev_gen) is int and 0 <= prev_gen < gen
+                and isinstance(h.get("sha256"), str) and _SHA_RE.match(h["sha256"])
+                and isinstance(prev_sha, str) and (prev_sha == "" or _SHA_RE.match(prev_sha))
+                and isinstance(h.get("sig"), str) and _SIG_RE.match(h["sig"])):
+            return None
+        if path.stat().st_size != len(line) + size:
+            return None
+        h["_offset"] = len(line)
+        return h
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _state_scan(dirp: Path) -> list[tuple[int, Path, dict]]:
+    """완결된 세대를 번호 순으로. 점으로 시작하는 임시 이름은 보지 않는다."""
+    out = []
+    if dirp.is_dir():
+        for f in dirp.iterdir():
+            if _STATE_FILE_RE.match(f.name) and (h := _state_header(f)) is not None:
+                out.append((h["generation"], f, h))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+def _state_blob(path: Path, header: dict) -> bytes | None:
+    """묶음의 바이트. 머리의 지문과 다르면 None — 깨진 세대를 내주지 않는다."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(header["_offset"])
+            blob = f.read()
+    except OSError:
+        return None
+    if len(blob) != header["size"] or hashlib.sha256(blob).hexdigest() != header["sha256"]:
+        return None
+    return blob
+
+
+def _state_place(dirp: Path, header: dict, blob: bytes) -> bool:
+    """세대 파일을 그 이름이 **없을 때만** 놓는다(LxM 127 §2). 점으로 시작하는 임시 이름으로 끝까지
+    쓴 뒤 link로 제 이름을 붙인다 — rename은 있는 파일을 말없이 덮는다. 감독기도 같은 디렉터리에
+    세대를 놓으므로, 둘이 부딪치면 하나만 선다. 이미 있으면 False(있던 파일은 그대로다)."""
+    final = dirp / f"{header['generation']:08d}.state"
+    tmp = dirp / f".{final.name}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+    line = (json.dumps(header, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    try:
+        with open(tmp, "wb") as f:
+            f.write(line)
+            f.write(blob)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.link(tmp, final)
+            return True
+        except FileExistsError:
+            return False
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def _state_prune(dirp: Path, keep: int) -> None:
+    """최근 `keep`세대만 남긴다. 나이가 아니라 개수로 지운다 — 오래 쉰 연구소가 마지막 묶음까지
+    잃지 않게. 지금 세대는 지워지지 않는다(가장 큰 번호다)."""
+    for _gen, path, _h in _state_scan(dirp)[:-keep]:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+
+
+def _state_sweep_tmp(state_dir: Path) -> None:
+    """뜰 때 남아 있는 임시 파일을 지운다(LxM 124 §1). 감독기는 임시 이름을 옮기지 않으므로
+    재시작을 넘지 못하지만, 재시작 없이 오래 도는 배치에서는 쌓인다."""
+    if not state_dir.is_dir():
+        return
+    for sub_dir in state_dir.iterdir():
+        if not sub_dir.is_dir():
+            continue
+        for f in sub_dir.iterdir():
+            if f.name.startswith(".") and f.name.endswith(".tmp"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+
+
+def _marked(marks_dir: Path | None, *parts: str) -> bool | None:
+    """표지가 있는가(0.8.0). 표지는 감독기가 쓰고 서버는 **읽기만** 한다 — 빈 파일이 있으면 그 quad나
+    세대가 바깥 저장소에 옮겨졌다는 뜻이다. 표지를 쓰지 않는 배치(`--marks-dir` 없음)에서는 None이고,
+    그때 답에는 그 칸이 없다."""
+    if marks_dir is None:
+        return None
+    return marks_dir.joinpath(*parts).is_file()
+
+
+def _index_entry(dirp: Path, n: str) -> dict | None:
+    """문 색인의 한 항목 — 저장된 **바이트**의 지문. 본문을 싣지 않고 봉투를 열지 않는다.
+    완결된 quad만(봉투와 서명이 있는 것). `body_sha256`은 봉투에 적힌 값이 아니라 본문 파일의 지문이다."""
+    env_p = dirp / f"{n}-envelope.json"
+    sig_p = dirp / f"{n}-sig.txt"
+    if not (env_p.is_file() and sig_p.is_file()):
+        return None
+    env_b = env_p.read_bytes()
+    if not env_b:
+        return None
+    entry = {"n": n, "envelope_sha256": hashlib.sha256(env_b).hexdigest(),
+             "sig_sha256": hashlib.sha256(sig_p.read_bytes()).hexdigest(),
+             "body_name": None, "body_sha256": None, "body_size": None}
+    bodies = sorted(dirp.glob(f"{n}-body.*"))
+    if bodies:
+        body_b = bodies[0].read_bytes()
+        entry.update(body_name=bodies[0].name[len(n) + 1:],
+                     body_sha256=hashlib.sha256(body_b).hexdigest(), body_size=len(body_b))
+    return entry
+
+
 def _split_path(path: str) -> tuple[str, str] | None:
     parts = [p for p in path.split("/") if p]
     if len(parts) != 3 or parts[0] != "v0":
@@ -395,6 +550,11 @@ class _DropHandler(BaseHTTPRequestHandler):
     entries: list
     limiter: RateLimiter
     audit_dir = None            # Path | None — 운반 트리 밖(make_server가 보증)
+    state_dir = None            # Path | None — 상태 칸(0.8.0). 없으면 칸 요청은 404
+    state_keep = STATE_KEEP
+    state_max_bytes = STATE_MAX_BYTES
+    state_max_jump = STATE_MAX_JUMP
+    marks_dir = None            # Path | None — 표지(0.8.0). 감독기가 쓰고 서버는 읽기만
     now = staticmethod(time.time)
 
     def _send(self, status: int, obj: dict, headers: dict | None = None):
@@ -483,14 +643,16 @@ class _DropHandler(BaseHTTPRequestHandler):
             self._send(200, {"channels": _filter_tree(_channel_tree(self.root), entry)})
             self._audit(entry, 200, op="channels")
             return
+        if self.path.split("?", 1)[0] == "/v0/state":
+            self._state_get()
+            return
         gate = self._gate("read")
         if gate is None:
             return
         entry, channel, door = gate
         since = "000"
-        if "?" in self.path:
-            q = dict(p.split("=", 1) for p in
-                     self.path.split("?", 1)[1].split("&") if "=" in p)
+        q = self._query()
+        if q:
             since = q.get("since", "000")
             if not _N_RE.match(since) and since != "000":
                 self._send(400, {"error": "since는 3~6자리 숫자"})
@@ -502,11 +664,198 @@ class _DropHandler(BaseHTTPRequestHandler):
             ns = sorted({f.name.split("-", 1)[0] for f in dirp.glob("*-envelope.json")
                          if _N_RE.match(f.name.split("-", 1)[0])}, key=int)
         fresh = [n for n in ns if int(n) > int(since)]
+        if q.get("index") == "1":
+            # 문 색인(0.8.0): 본문 없이 번호와 저장된 바이트의 지문만. 대조가 문마다 요청 한 번이 된다.
+            # 기본은 처음부터다 — 낮은 번호가 늦게 올라온 경우를 잡으려면 그래야 한다. `since`는 다음 쪽용.
+            index = []
+            for n in fresh[:INDEX_PAGE_SIZE]:
+                item = _index_entry(dirp, n)
+                if item is None:
+                    continue
+                mirrored = _marked(self.marks_dir, "quads", channel, door, n)
+                if mirrored is not None:
+                    item["mirrored"] = mirrored
+                index.append(item)
+            self._send(200, {"index": index, "more": len(fresh) > INDEX_PAGE_SIZE})
+            self._audit(entry, 200, op="index", channel=channel, door=door, since=since,
+                        quads=len(index))
+            return
         quads = [b for n in fresh[:PAGE_SIZE] if (b := _quad_files(dirp, n))]
         self._send(200, {"quads": quads, "more": len(fresh) > PAGE_SIZE})
         self._audit(entry, 200, channel=channel, door=door, since=since, quads=len(quads))
 
+    # ── 상태 칸(0.8.0) ──
+    def _query(self) -> dict:
+        if "?" not in self.path:
+            return {}
+        return dict(p.split("=", 1) for p in self.path.split("?", 1)[1].split("&") if "=" in p)
+
+    def _state_gate(self) -> TokenEntry | None:
+        """인증 → rate limit → 칸이 있는 배치인가(404) → 줄에 `id=`가 있는가(403). 0.7.0과 같은 순서다.
+        칸은 토큰 줄의 `id=`마다 하나이고, 자기 칸만 읽고 쓴다."""
+        entry = self._auth()
+        if entry is None:
+            return None
+        if self.state_dir is None:
+            self._send(404, {"error": "이 드롭에는 상태 칸이 없다"})
+            self._audit(entry, 404, path="/v0/state")
+            return None
+        if not entry.explicit_id:
+            self._send(403, {"error": "상태 칸은 토큰 줄에 id=가 있어야 쓴다"})
+            self._audit(entry, 403, path="/v0/state")
+            return None
+        return entry
+
+    def _state_common(self, entry: TokenEntry, gens: list) -> dict:
+        """상태 칸의 답에 언제나 싣는 것 — 이 배치의 한도, 남겨 둔 세대의 목록, 자리를 잡았다는 신호.
+        표지를 쓰지 않는 배치에서는 `mirrored`·`settled`·`settled_by_timeout`이 없다."""
+        out = {"max_bytes": self.state_max_bytes}
+        kept = []
+        for gen, _path, h in reversed(gens):
+            item = {"generation": gen, "sha256": h["sha256"]}
+            mirrored = _marked(self.marks_dir, "state", entry.id, f"{gen:08d}")
+            if mirrored is not None:
+                item["mirrored"] = mirrored
+            kept.append(item)
+        out["kept"] = kept
+        settled = _marked(self.marks_dir, "settled")
+        if settled is not None:
+            out["settled"] = settled
+            out["settled_by_timeout"] = _marked(self.marks_dir, "settled-by-timeout")
+        return out
+
+    def _state_get(self) -> None:
+        entry = self._state_gate()
+        if entry is None:
+            return
+        q = self._query()
+        gens = _state_scan(self.state_dir / entry.id)
+        common = self._state_common(entry, gens)
+        want = q.get("generation")
+        if want is not None and not (want.isdigit() and len(want) <= 8):
+            self._send(400, {"error": "generation은 여덟 자리 이하의 숫자"})
+            self._audit(entry, 400, op="state_get")
+            return
+        if not gens:
+            # 빈 칸은 세대 0이고 지문은 빈 문자열이다. 처음 되살리는 환경도 한도와 신호를 여기서 안다.
+            self._send(404, {"error": "칸이 비었다", "generation": 0, "sha256": "", **common})
+            self._audit(entry, 404, op="state_get", generation=0)
+            return
+        hit = gens[-1] if want is None else next((g for g in gens if g[0] == int(want)), None)
+        if hit is None:
+            self._send(404, {"error": "남겨 둔 세대가 아니다", "generation": gens[-1][0],
+                             "sha256": gens[-1][2]["sha256"], **common})
+            self._audit(entry, 404, op="state_get", generation=int(want))
+            return
+        gen, path, h = hit
+        body = {"generation": gen, "sha256": h["sha256"], "prev_generation": h["prev_generation"],
+                "prev_sha256": h["prev_sha256"], "size": h["size"], **common}
+        mirrored = _marked(self.marks_dir, "state", entry.id, f"{gen:08d}")
+        if mirrored is not None:
+            body["mirrored"] = mirrored
+        if q.get("meta") != "1":
+            blob = _state_blob(path, h)
+            if blob is None:
+                self._send(500, {"error": "저장된 세대가 머리와 맞지 않는다"})
+                self._audit(entry, 500, op="state_get", generation=gen)
+                return
+            body["blob_b64"] = base64.b64encode(blob).decode("ascii")
+            body["sig"] = h["sig"]
+        self._send(200, body)
+        self._audit(entry, 200, op="state_get", generation=gen, sha256=h["sha256"],
+                    meta=q.get("meta") == "1" or None)
+
+    def _state_post(self) -> None:
+        entry = self._state_gate()
+        if entry is None:
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0 or length > REQUEST_MAX_BYTES:
+            self._send(413, {"error": f"요청은 1..{REQUEST_MAX_BYTES} 바이트"})
+            self._audit(entry, 413, op="state_put")
+            return
+        try:
+            obj = json.loads(self.rfile.read(length).decode("utf-8"))
+            if not isinstance(obj, dict):
+                raise ValueError("본문은 JSON 객체")
+            expect_gen, expect_sha = obj.get("expect_generation"), obj.get("expect_sha256")
+            floor, sha, sig = obj.get("floor_generation", 0), obj.get("sha256"), obj.get("sig")
+            if not (type(expect_gen) is int and 0 <= expect_gen <= STATE_GENERATION_MAX):
+                raise ValueError("expect_generation은 0 이상의 정수")
+            if not (isinstance(expect_sha, str)
+                    and (_SHA_RE.match(expect_sha) or (expect_sha == "" and expect_gen == 0))):
+                raise ValueError("expect_sha256은 지금 세대의 지문(빈 칸이면 빈 문자열)")
+            if not (type(floor) is int and 0 <= floor <= STATE_GENERATION_MAX):
+                raise ValueError("floor_generation은 0 이상의 정수")
+            if not (isinstance(sha, str) and _SHA_RE.match(sha)):
+                raise ValueError("sha256은 hex 64자")
+            if not (isinstance(sig, str) and _SIG_RE.match(sig)):
+                raise ValueError("sig는 hex 128자")
+            if not isinstance(obj.get("blob_b64"), str):
+                raise ValueError("blob_b64 없음")
+            blob = base64.b64decode(obj["blob_b64"], validate=True)
+        except (ValueError, UnicodeDecodeError) as e:
+            self._send(400, {"error": str(e)})
+            self._audit(entry, 400, op="state_put")
+            return
+        if len(blob) > self.state_max_bytes:
+            self._send(413, {"error": f"묶음은 {self.state_max_bytes} 바이트 이하",
+                             "max_bytes": self.state_max_bytes})
+            self._audit(entry, 413, op="state_put", sha256=sha)
+            return
+        if hashlib.sha256(blob).hexdigest() != sha:
+            self._send(400, {"error": "sha256이 묶음의 바이트와 다르다"})
+            self._audit(entry, 400, op="state_put", sha256=sha)
+            return
+        dirp = self.state_dir / entry.id
+        dirp.mkdir(parents=True, exist_ok=True)
+        gens = _state_scan(dirp)
+        cur_gen, cur = (gens[-1][0], gens[-1][2]) if gens else (0, None)
+        cur_sha = cur["sha256"] if cur else ""
+        if floor > cur_gen + self.state_max_jump:
+            self._send(400, {"error": "floor_generation이 지금 세대보다 너무 크다",
+                             "generation": cur_gen})
+            self._audit(entry, 400, op="state_put", sha256=sha)
+            return
+        if (expect_gen, expect_sha) == (cur_gen, cur_sha):
+            # 조건은 세대와 지문 둘이다. 새 번호는 되돌아가지 않는다 — 올리는 쪽이 보낸 적 있는
+            # 가장 큰 번호(floor)보다 크게 매긴다.
+            new_gen = max(cur_gen, floor) + 1
+            if new_gen > STATE_GENERATION_MAX:
+                self._send(400, {"error": "세대 번호가 끝에 닿았다"})
+                self._audit(entry, 400, op="state_put", sha256=sha)
+                return
+            header = {"generation": new_gen, "sha256": sha, "prev_generation": cur_gen,
+                      "prev_sha256": cur_sha, "size": len(blob), "sig": sig}
+            if _state_place(dirp, header, blob):
+                _state_prune(dirp, self.state_keep)
+                self._send(200, {"generation": new_gen, "stored": True, "dedup": False})
+                self._audit(entry, 200, op="state_put", generation=new_gen, sha256=sha,
+                            stored=True, dedup=False)
+                return
+            # 그 이름이 방금 생겼다(감독기가 놓았다). 덮지 않는다 — 조건이 어긋난 것으로 답한다.
+            gens = _state_scan(dirp)
+            cur_gen, cur = (gens[-1][0], gens[-1][2]) if gens else (0, None)
+            cur_sha = cur["sha256"] if cur else ""
+        elif (cur is not None and (expect_gen, expect_sha) == (cur["prev_generation"],
+                                                               cur["prev_sha256"])
+              and sha == cur_sha):
+            # 같은 것을 같은 조건으로 다시 올렸다 — 응답을 잃은 경우다. 편지의 중복 처리와 같은 뜻.
+            self._send(200, {"generation": cur_gen, "stored": True, "dedup": True})
+            self._audit(entry, 200, op="state_put", generation=cur_gen, sha256=sha,
+                        stored=True, dedup=True)
+            return
+        self._send(409, {"error": "조건이 지금 세대와 다르다", "generation": cur_gen,
+                         "sha256": cur_sha})
+        self._audit(entry, 409, op="state_put", generation=cur_gen, sha256=sha, stored=False)
+
     def do_POST(self):  # noqa: N802
+        if self.path.split("?", 1)[0] == "/v0/state":
+            self._state_post()
+            return
         gate = self._gate("write")
         if gate is None:
             return
@@ -563,21 +912,54 @@ def make_server(root: str | Path, token_file: str | Path,
                 bind: str = "127.0.0.1", port: int = 8642,
                 rate_limit_per_minute: int = RATE_LIMIT_PER_MINUTE,
                 clock=time.monotonic, audit_dir: str | Path | None = None,
-                now=time.time) -> HTTPServer:
+                now=time.time, state_dir: str | Path | None = None,
+                state_keep: int = STATE_KEEP, state_max_bytes: int = STATE_MAX_BYTES,
+                state_max_jump: int = STATE_MAX_JUMP,
+                marks_dir: str | Path | None = None) -> HTTPServer:
     entries = load_token_entries(token_file)
     root_p = Path(root)
+    root_r = root_p.resolve()
     audit_p = None
     if audit_dir is not None:
         audit_p = Path(audit_dir).resolve()
-        root_r = root_p.resolve()
         if audit_p == root_r or root_r in audit_p.parents:
             # 감사 기록이 운반 트리 안에 있으면 드롭으로 읽힌다 — 뜨지 않는다.
             raise ValueError("감사 디렉터리는 운반 트리(--root) 밖이어야 한다")
         audit_p.mkdir(parents=True, exist_ok=True)
+    # 상태 디렉터리와 표지 디렉터리(0.8.0)도 같은 규칙이다. 서로의 안에도 두지 않는다 —
+    # 감독기가 디렉터리마다 다른 규칙으로 옮기므로 겹치면 표지가 세대나 편지로 읽힌다.
+    extra = {}
+    for label, given in (("상태 디렉터리(--state-dir)", state_dir),
+                         ("표지 디렉터리(--marks-dir)", marks_dir)):
+        if given is None:
+            continue
+        d = Path(given).resolve()
+        others = [("운반 트리(--root)", root_r)] + ([("감사 디렉터리", audit_p)] if audit_p else []) \
+            + list(extra.items())
+        for other_label, other in others:
+            if d == other or other in d.parents or d in other.parents:
+                raise ValueError(f"{label}는 {other_label}와 겹치지 않는 자리여야 한다")
+        extra[label] = d
+    state_p = extra.get("상태 디렉터리(--state-dir)")
+    marks_p = extra.get("표지 디렉터리(--marks-dir)")
+    if state_keep < 1:
+        raise ValueError("--state-keep은 1 이상")
+    if state_max_jump < 1:
+        raise ValueError("--state-max-jump는 1 이상")
+    # 묶음은 base64로 실려 3분의 1이 커진다. 요청 한도는 건드리지 않으므로 값에 천장이 있다.
+    if state_max_bytes < 1 or 4 * math.ceil(state_max_bytes / 3) + _STATE_REQUEST_OVERHEAD \
+            > REQUEST_MAX_BYTES:
+        raise ValueError(f"--state-max-bytes가 요청 한도({REQUEST_MAX_BYTES} 바이트)에 들지 않는다")
+    if state_p is not None:
+        state_p.mkdir(parents=True, exist_ok=True)
+        _state_sweep_tmp(state_p)
     handler = type("Handler", (_DropHandler,),
                    {"root": root_p, "entries": entries,
                     "limiter": RateLimiter(rate_limit_per_minute, clock=clock),
-                    "audit_dir": audit_p, "now": staticmethod(now)})
+                    "audit_dir": audit_p, "now": staticmethod(now),
+                    "state_dir": state_p, "state_keep": state_keep,
+                    "state_max_bytes": state_max_bytes, "state_max_jump": state_max_jump,
+                    "marks_dir": marks_p})
     return HTTPServer((bind, port), handler)
 
 

@@ -13,6 +13,7 @@
     organum-hub rotate-key / revoke-key / was-valid                        # key lifecycle
     organum-hub serve / push / pull / channels    # git 없는 전달 — HTTP 우체통(drop v0)
     organum-hub check-tokens --token-file …       # 서버용 토큰 파일 검사(범위·id, 값은 안 찍음)
+    organum-hub snapshot / restore / reconcile / checkpoint   # 원장과 발신함을 묶음으로 — 저장·복원·대조·상태 칸
 
 ## 상태 모델 — 로그가 곧 상태다
 
@@ -41,6 +42,7 @@ try:
     from organum import hub_envelope as he
     from organum import hub_log as hl
     from organum import hub_ops as ho
+    from organum import hub_state as hs
     from organum import hub_wire as hw
     from organum import schnorr_pure as sp
 except ImportError:                                    # 스크립트 직접 실행 경로
@@ -48,6 +50,7 @@ except ImportError:                                    # 스크립트 직접 실
     import hub_envelope as he
     import hub_log as hl
     import hub_ops as ho
+    import hub_state as hs
     import hub_wire as hw
     import schnorr_pure as sp
 
@@ -213,6 +216,16 @@ def cmd_message(a):
     body_p = Path(a.body_file)
     if not body_p.is_file():
         raise HubCliError(f"본문 파일 없음: {a.body_file}")
+    # 0.8.0: 상태 칸을 쓰는 원장이면 넘치는 본문을 **원장에 넣기 전에** 거절한다. 넣은 뒤에는
+    # 되돌릴 수 없고, 묶음에 들어가지 않는 편지는 "올리기 전에 저장한다"를 지킬 수 없다.
+    try:
+        fit = hs.body_fits(a.dir, body_p.read_bytes(), _locked=True)
+    except hs.StateError as e:
+        raise HubCliError(f"상태 묶음의 크기를 잴 수 없다: {e}")
+    if fit is not None and not fit["fits"]:
+        raise HubCliError(
+            f"본문이 상태 칸의 묶음에 들어가지 않는다(어림 {fit['with_body_estimate']} 바이트 > 한도 "
+            f"{fit['max_bytes']} 바이트) — 원장에 넣지 않았다")
     env = ho.build_message_envelope(
         cfg, signer=a.signer, key_id=a.key_id, epoch=a.epoch,
         to_lab=a.to_lab, to_id=a.to_id, to_epoch=a.to_epoch,
@@ -462,7 +475,10 @@ def cmd_serve(a):
     기본 60/분(hosted 비용 유계) — self-host P2P는 --rate-limit 0으로 꺼도 된다."""
     try:
         srv = hd.make_server(a.root, a.token_file, bind=a.bind, port=a.port,
-                             rate_limit_per_minute=a.rate_limit, audit_dir=a.audit_log)
+                             rate_limit_per_minute=a.rate_limit, audit_dir=a.audit_log,
+                             state_dir=a.state_dir, state_keep=a.state_keep,
+                             state_max_bytes=a.state_max_bytes,
+                             state_max_jump=a.state_max_jump, marks_dir=a.marks_dir)
     except (ValueError, OSError) as e:
         raise HubCliError(str(e))
     entries = srv.RequestHandlerClass.entries
@@ -470,6 +486,10 @@ def cmd_serve(a):
                       "bind": a.bind, "port": srv.server_address[1],
                       "rate_limit_per_minute": a.rate_limit,
                       "audit_log": str(Path(a.audit_log)) if a.audit_log else None,
+                      "state": ({"dir": str(Path(a.state_dir)), "keep": a.state_keep,
+                                 "max_bytes": a.state_max_bytes, "max_jump": a.state_max_jump}
+                                if a.state_dir else None),
+                      "marks_dir": str(Path(a.marks_dir)) if a.marks_dir else None,
                       "tokens": {m: sum(1 for e in entries if e.describe()["mode"] == m)
                                  for m in ("legacy", "scoped", "revoked")}},
                      ensure_ascii=False), flush=True)
@@ -478,6 +498,112 @@ def cmd_serve(a):
     except KeyboardInterrupt:
         return 0
     return 0
+
+
+# ── 상태의 저장·복원·대조·체크포인트(0.8.0) ──────────────────────────────────
+
+def _outbox_specs(values, *, want: str) -> tuple[dict, dict]:
+    """`--outbox`를 읽는다. `want="door"`면 `<디렉터리>=<channel>/<from-x>`, `want="dir"`면
+    `<묶음 안의 이름>=<디렉터리>`. `=`가 없으면 디렉터리의 이름이 발신함의 이름이다."""
+    dirs, doors = {}, {}
+    for v in values or []:
+        left, sep, right = v.partition("=")
+        if want == "door":
+            name = Path(left).name
+            dirs[name] = Path(left)
+            if sep:
+                doors[name] = right
+        else:
+            name, path = (left, right) if sep else (Path(left).name, left)
+            dirs[name] = Path(path)
+        if not name:
+            raise HubCliError(f"--outbox를 읽을 수 없다: {v!r}")
+    return dirs, doors
+
+
+def _state(fn, *args, **kw):
+    try:
+        return fn(*args, **kw)
+    except hs.CheckpointStopped as e:
+        print(json.dumps({"stopped": e.reason, **e.detail}, ensure_ascii=False))
+        raise HubCliError(str(e))
+    except (hs.StateError, ho.HubOpsError, hd.DropError, OSError) as e:
+        raise HubCliError(str(e))
+
+
+def cmd_snapshot(a):
+    """원장과 발신함을 같은 시점으로 묶어 파일 하나로 낸다. 키는 다루지 않는다. 불완전한 quad,
+    넣고 내보내지 않은 편지, bbs 발신 기록이 있으면 거부한다."""
+    dirs, doors = _outbox_specs(a.outbox, want="door")
+    blob = _state(hs.snapshot, a.dir, dirs, doors=doors, allow_unexported=a.allow_unexported)
+    out = Path(a.out)
+    if out.exists():
+        raise HubCliError(f"{out} 이미 존재 — 덮어쓰지 않는다")
+    out.write_bytes(blob)
+    print(json.dumps({"snapshot": str(out), "size": len(blob),
+                      "sha256": hashlib.sha256(blob).hexdigest()}, ensure_ascii=False))
+    return 0
+
+
+def cmd_restore(a):
+    """묶음에서 **빈 자리에** 되살린다. `--snapshot`이면 파일에서, `--url`이면 드롭의 상태 칸에서.
+    상태 칸에서는 자리를 잡았다는 신호와 표지를 기다리고, 남겨 둔 세대를 증인으로 본다.
+    복원만 하고 보내지 않는다 — 끝에 `reconcile`을 돌린다."""
+    dirs, _ = _outbox_specs(a.outbox, want="dir")
+    if bool(a.snapshot) == bool(a.url):
+        raise HubCliError("--snapshot <파일>과 --url <드롭> 가운데 하나를 준다")
+    if a.snapshot:
+        report = _state(hs.restore, Path(a.snapshot).read_bytes(), a.dir, dirs)
+    else:
+        if not (a.token_file and a.pubkey):
+            raise HubCliError("상태 칸에서 되살리려면 --token-file과 --pubkey(자기 공개키)가 필요하다")
+        token = hd.load_tokens(a.token_file)[0]
+        report = _state(hs.restore_from_slot, a.dir, dirs, drop_url=a.url, token=token,
+                        pubkey_hex=a.pubkey, generation=a.generation,
+                        accept_timeout=a.accept_timeout, wait=a.wait, timeout=a.timeout,
+                        received_only=a.received_only)
+        for name, info in report["outboxes"].items():
+            if info["bodies_to_fetch"] and info.get("door"):
+                info["fetched"] = _state(hs.fetch_bodies, dirs[name],
+                                         f"{a.url.rstrip('/')}/v0/{info['door']}", token,
+                                         info["bodies_to_fetch"], timeout=a.timeout)
+    print(json.dumps(report, ensure_ascii=False))
+    # 4: 표지를 쓰지 않는 서버에서 200만 믿고 되살렸다(--received-only). 정상 복원과 구분한다.
+    return 4 if report.get("received_only") else 0
+
+
+def cmd_reconcile(a):
+    """로컬 디렉터리와 드롭의 그 문을 처음부터 끝까지 견준다. 읽기 전용이다. 종료코드: 모두 같거나
+    로컬에만 있으면 0, 드롭에만 있거나 로컬이 불완전하면 1, 같은 번호에 다른 바이트가 있으면 2."""
+    token = hd.load_tokens(a.token_file)[0]
+    report = _state(hs.reconcile, a.local, a.url, token, timeout=a.timeout)
+    print(json.dumps(report, ensure_ascii=False))
+    return report["exit"]
+
+
+def cmd_checkpoint(a):
+    """묶음을 드롭의 상태 칸에 올리고 표지를 본다. **편지를 올리지 않는다** — 종료코드가 0일 때만
+    그 다음에 `push`한다. 0: 올려도 된다(표지를 봤다). 3: 받았으나 바깥 저장을 확인하지 못했다(다시
+    부르면 이어서 본다). 표지를 쓰지 않는 서버에서는 언제나 3이다. 4: `--received-only`를 명시했고
+    표지를 쓰지 않는 서버가 받았다 — 받았다는 것까지만이다. 2: 멈췄다."""
+    dirs, doors = _outbox_specs(a.outbox, want="door")
+    onto = None
+    if a.onto:
+        g, sep, sha = a.onto.partition(":")
+        if not (sep and g.isdigit()):
+            raise HubCliError("--onto는 <세대>:<지문>")
+        onto = (int(g), sha)
+    token = hd.load_tokens(a.token_file)[0]
+    with_body = Path(a.with_body).read_bytes() if a.with_body else None
+    r = _state(hs.checkpoint, a.dir, dirs, doors, seed=_read_seed(a.key), drop_url=a.url,
+               token=token, onto=onto, dry_run=a.dry_run, with_body=with_body, wait=a.wait,
+               timeout=a.timeout, received_only=a.received_only)
+    print(json.dumps(r, ensure_ascii=False))
+    if a.dry_run:
+        return 0 if r["fits"] else 3
+    if r.get("ready_to_push"):
+        return 0
+    return 4 if r.get("received_only") else 3
 
 
 def cmd_check_tokens(a):
@@ -619,8 +745,50 @@ def main(argv=None) -> int:
                               ("--rate-limit",
                                {"type": int,
                                 "default": hd.RATE_LIMIT_PER_MINUTE}),
-                              ("--audit-log", {"default": None})]),
+                              ("--audit-log", {"default": None}),
+                              ("--state-dir", {"default": None}),
+                              ("--state-keep", {"type": int, "default": hd.STATE_KEEP}),
+                              ("--state-max-bytes",
+                               {"type": int, "default": hd.STATE_MAX_BYTES}),
+                              ("--state-max-jump",
+                               {"type": int, "default": hd.STATE_MAX_JUMP}),
+                              ("--marks-dir", {"default": None})]),
         ("check-tokens", cmd_check_tokens, [("--token-file", {"required": True})]),
+        ("snapshot", cmd_snapshot, [("--dir", {"required": True}),
+                                    ("--outbox", {"action": "append", "required": True}),
+                                    ("--out", {"required": True}),
+                                    ("--allow-unexported", {"action": "store_true"})]),
+        ("restore", cmd_restore, [("--dir", {"required": True}),
+                                  ("--outbox", {"action": "append", "required": True}),
+                                  ("--snapshot", {"default": None}),
+                                  ("--url", {"default": None}),
+                                  ("--token-file", {"default": None}),
+                                  ("--pubkey", {"default": None}),
+                                  ("--generation", {"type": int, "default": None}),
+                                  ("--accept-timeout", {"action": "store_true"}),
+                                  ("--received-only", {"action": "store_true"}),
+                                  ("--wait", {"type": float,
+                                              "default": hs.RESTORE_WAIT_SECONDS}),
+                                  ("--timeout", {"type": int,
+                                                 "default": hd.CLIENT_TIMEOUT_SECONDS})]),
+        ("reconcile", cmd_reconcile, [("--local", {"required": True}),
+                                      ("--url", {"required": True}),
+                                      ("--token-file", {"required": True}),
+                                      ("--timeout", {"type": int,
+                                                     "default": hd.CLIENT_TIMEOUT_SECONDS})]),
+        ("checkpoint", cmd_checkpoint, [("--dir", {"required": True}),
+                                        ("--outbox", {"action": "append", "required": True}),
+                                        ("--key", {"required": True}),
+                                        ("--url", {"required": True}),
+                                        ("--token-file", {"required": True}),
+                                        ("--onto", {"default": None}),
+                                        ("--dry-run", {"action": "store_true"}),
+                                        ("--received-only", {"action": "store_true"}),
+                                        ("--with-body", {"default": None}),
+                                        ("--wait", {"type": float,
+                                                    "default": hs.MARK_WAIT_SECONDS}),
+                                        ("--timeout", {"type": int,
+                                                       "default": hd.CLIENT_TIMEOUT_SECONDS})]),
         ("push", cmd_push, [("--url", {"required": True}),
                             ("--quad", {"required": True}),
                             ("--token-file", {"required": True}),
