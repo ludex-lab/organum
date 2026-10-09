@@ -174,12 +174,23 @@ class TokenEntry:
     def allows(self, axis: str, channel: str, door: str) -> bool:
         return any(_pattern_allows(p, channel, door) for p in getattr(self, axis))
 
+    def state_slot(self) -> str:
+        """이 줄이 상태 칸에서 할 수 있는 것(0.9.0, LxM 151 §2). `none` · `read` · `write`.
+
+        상태 칸은 원장을 가진 발신자의 것이고, 발신자의 줄에는 자기 문의 쓰기 범위가 있다. 그래서
+        **쓰기 범위가 하나도 없는 범위 줄**은 `id=`가 있어도 상태 칸에 쓰지 못한다 — 읽기만 받은
+        줄(창구의 줄 같은 것)이 자기 이름의 칸에 묶음을 쌓지 못하게 한다. 범위를 적지 않은 호환 줄은
+        0.8.0과 같이 `id=`가 있으면 쓴다."""
+        if self.revoked or not self.explicit_id:
+            return "none"
+        return "write" if (self.legacy or self.write) else "read"
+
     def describe(self) -> dict:
         """토큰 값 없는 요약(검사 명령·기동 출력용)."""
         mode = "revoked" if self.revoked else ("legacy" if self.legacy else "scoped")
         none = self.revoked                     # 폐기 줄은 아무것도 열지 않는다
         return {"id": self.id, "mode": mode, "write": [] if none else list(self.write),
-                "read": [] if none else list(self.read)}
+                "read": [] if none else list(self.read), "state_slot": self.state_slot()}
 
 
 def _pattern_allows(pattern: str, channel: str, door: str) -> bool:
@@ -313,8 +324,9 @@ class RateLimiter:
         return None
 
 
-def _quad_files(dirp: Path, n: str) -> dict | None:
-    """완성 quad만 번들로. envelope는 마지막에 쓰이므로 존재+비어있지 않음 = 완성."""
+def _quad_files(dirp: Path, n: str, bodies: bool = True) -> dict | None:
+    """완성 quad만 번들로. envelope는 마지막에 쓰이므로 존재+비어있지 않음 = 완성.
+    `bodies=False`면 본문의 바이트를 읽지도 싣지도 않는다 — `body_b64` 칸이 없고 `body_name`만 있다."""
     env_p = dirp / f"{n}-envelope.json"
     sig_p = dirp / f"{n}-sig.txt"
     if not (env_p.is_file() and sig_p.is_file()):
@@ -325,11 +337,14 @@ def _quad_files(dirp: Path, n: str) -> dict | None:
     bundle = {"n": n,
               "envelope_b64": base64.b64encode(env_b).decode("ascii"),
               "sig": sig_p.read_text(encoding="utf-8").strip(),
-              "body_name": None, "body_b64": None}
-    bodies = sorted(dirp.glob(f"{n}-body.*"))
+              "body_name": None}
     if bodies:
-        bundle["body_name"] = bodies[0].name[len(n) + 1:]
-        bundle["body_b64"] = base64.b64encode(bodies[0].read_bytes()).decode("ascii")
+        bundle["body_b64"] = None
+    found = sorted(dirp.glob(f"{n}-body.*"))
+    if found:
+        bundle["body_name"] = found[0].name[len(n) + 1:]
+        if bodies:
+            bundle["body_b64"] = base64.b64encode(found[0].read_bytes()).decode("ascii")
     return bundle
 
 
@@ -680,9 +695,29 @@ class _DropHandler(BaseHTTPRequestHandler):
             self._audit(entry, 200, op="index", channel=channel, door=door, since=since,
                         quads=len(index))
             return
-        quads = [b for n in fresh[:PAGE_SIZE] if (b := _quad_files(dirp, n))]
-        self._send(200, {"quads": quads, "more": len(fresh) > PAGE_SIZE})
-        self._audit(entry, 200, channel=channel, door=door, since=since, quads=len(quads))
+        # `limit`(0.9.0): 한 쪽의 개수를 부르는 쪽이 줄인다 — 한 통만 받으려는 쪽이 스무 통의 본문을
+        # 함께 받지 않게. 늘리지는 못한다.
+        page = PAGE_SIZE
+        if "limit" in q:
+            lim = q["limit"]
+            if not (lim.isdigit() and len(lim) <= 3 and 1 <= int(lim) <= PAGE_SIZE):
+                self._send(400, {"error": f"limit은 1부터 {PAGE_SIZE}까지"})
+                self._audit(entry, 400, channel=channel, door=door)
+                return
+            page = int(lim)
+        # `bodies=0`(0.9.0): 봉투와 서명만 준다. 받는 이를 보려고 봉투만 읽는 쪽이 남의 앞 본문을
+        # 받지 않게 한다(Orin 056). 감사 줄에 본문 없이 읽었다는 것이 남는다.
+        with_bodies = True
+        if "bodies" in q:
+            if q["bodies"] not in ("0", "1"):
+                self._send(400, {"error": "bodies는 0 또는 1"})
+                self._audit(entry, 400, channel=channel, door=door)
+                return
+            with_bodies = q["bodies"] == "1"
+        quads = [b for n in fresh[:page] if (b := _quad_files(dirp, n, with_bodies))]
+        self._send(200, {"quads": quads, "more": len(fresh) > page})
+        self._audit(entry, 200, channel=channel, door=door, since=since, quads=len(quads),
+                    bodies=None if with_bodies else False)
 
     # ── 상태 칸(0.8.0) ──
     def _query(self) -> dict:
@@ -762,12 +797,18 @@ class _DropHandler(BaseHTTPRequestHandler):
             body["blob_b64"] = base64.b64encode(blob).decode("ascii")
             body["sig"] = h["sig"]
         self._send(200, body)
+        # 그때 답한 `mirrored`를 감사 줄에 남긴다(0.9.0, LxM 145 §2) — 표지가 선 것을 본 때를 운영자가
+        # 미루어 읽지 않고 기록에서 읽는다. 표지를 쓰지 않는 배치에서는 칸이 없다.
         self._audit(entry, 200, op="state_get", generation=gen, sha256=h["sha256"],
-                    meta=q.get("meta") == "1" or None)
+                    meta=q.get("meta") == "1" or None, mirrored=mirrored)
 
     def _state_post(self) -> None:
         entry = self._state_gate()
         if entry is None:
+            return
+        if entry.state_slot() != "write":
+            self._send(403, {"error": "이 토큰 줄은 상태 칸에 쓰지 못한다 — 쓰기 범위가 하나도 없다"})
+            self._audit(entry, 403, op="state_put")
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))

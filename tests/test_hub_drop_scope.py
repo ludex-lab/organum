@@ -352,7 +352,7 @@ def test_CLI_check_tokens는_값_없이_id와_범위만_보인다(tmp_path):
     out = json.loads(r.stdout)
     assert out["ok"] is True and [e["mode"] for e in out["entries"]] == ["legacy", "scoped", "revoked"]
     assert out["entries"][1] == {"id": "jdot-hq", "mode": "scoped", "write": ["hub-ops/from-jdot-hq"],
-                                 "read": ["hub-ops/from-organum"]}
+                                 "read": ["hub-ops/from-organum"], "state_slot": "write"}
     assert out["entries"][2]["write"] == [] and out["entries"][2]["read"] == []
 
     tok.write_text("s3cret-TOKEN wirte=hub-ops/from-x\n", encoding="utf-8")       # 오타
