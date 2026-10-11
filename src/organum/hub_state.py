@@ -651,25 +651,43 @@ def _extends(old_manifest: dict, old_parts: dict, new_manifest: dict, new_parts:
     return True
 
 
-def _verify_bundle(body: dict, pubkey_hex: str, max_bytes: int | None) -> tuple[bytes, dict, dict]:
-    """상태 칸의 답 → (묶음, 목록, 조각). 지문과 서명을 **자기 공개키**로 본다. 묶음 안의 것을 믿지 않는다."""
+def _pubkeys(pubkey_hex) -> tuple:
+    """믿는 공개키들. 글 하나, 또는 여럿의 목록이다. **부르는 쪽이 밖에서 믿은 값**이다 — 묶음 안에
+    적힌 키는 여기에 들지 않는다. 서명 키를 바꾼 연구소의 세대를 되살릴 때 옛 키와 새 키를 함께 준다."""
+    if isinstance(pubkey_hex, str):
+        keys = (pubkey_hex,)
+    else:
+        keys = tuple(pubkey_hex) if isinstance(pubkey_hex, (list, tuple)) else ()
+    if not keys or not all(isinstance(k, str) and re.fullmatch(r"[0-9a-f]{64}", k) for k in keys):
+        raise StateError("믿는 공개키는 hex64 하나 이상이다")
+    return keys
+
+
+def _verify_bundle(body: dict, pubkey_hex, max_bytes: int | None) -> tuple[bytes, dict, dict, str]:
+    """상태 칸의 답 → (묶음, 목록, 조각, 서명을 세운 공개키). 지문과 서명을 **밖에서 믿은 공개키**로
+    본다. 묶음 안의 것을 믿지 않는다 — 목록을 풀기 전에 서명부터 본다."""
+    trusted = _pubkeys(pubkey_hex)
     try:
         blob = base64.b64decode(body["blob_b64"], validate=True)
     except (KeyError, ValueError):
         raise StateError("상태 칸의 답에 묶음이 없다") from None
     if _sha(blob) != body.get("sha256"):
         raise StateError("받은 묶음의 지문이 서버가 말한 것과 다르다")
+    signed_by = None
     try:
-        ok = sp.verify(bytes.fromhex(body.get("sig", "")), hashlib.sha256(blob).digest(),
-                       bytes.fromhex(pubkey_hex))
+        sig, digest = bytes.fromhex(body.get("sig", "")), hashlib.sha256(blob).digest()
+        for k in trusted:
+            if sp.verify(sig, digest, bytes.fromhex(k)):
+                signed_by = k
+                break
     except ValueError:
-        ok = False
-    if not ok:
+        signed_by = None
+    if signed_by is None:
         raise StateError("묶음의 서명이 자기 공개키로 서지 않는다")
     manifest, parts = unpack(blob, max_bytes=max_bytes)
     if manifest.get("generation") != body.get("generation"):
         raise StateError("묶음 안의 세대가 서버가 말한 세대와 다르다")
-    return blob, manifest, parts
+    return blob, manifest, parts, signed_by
 
 
 # ── 체크포인트 ───────────────────────────────────────────────────────────────
@@ -696,7 +714,8 @@ def checkpoint(hub_dir, outboxes: dict[str, Path], doors: dict[str, str], *, see
                drop_url: str, token: str, onto: tuple[int, str] | None = None,
                dry_run: bool = False, with_body: bytes | None = None,
                wait: float = MARK_WAIT_SECONDS, timeout: int = hd.CLIENT_TIMEOUT_SECONDS,
-               received_only: bool = False, sleep=time.sleep, clock=time.monotonic) -> dict:
+               received_only: bool = False, trusted_pubkeys=None,
+               sleep=time.sleep, clock=time.monotonic) -> dict:
     """묶음을 상태 칸에 올리고 표지를 본다. 이 명령은 편지를 올리지 않는다 — 끝난 뒤에 `push`한다.
 
     순서: 잠금 → 문 색인으로 뺄 본문을 정함 → 연장인지 봄 → 묶음을 뜨고 서명 → **보내기 전에** 기록 →
@@ -705,10 +724,16 @@ def checkpoint(hub_dir, outboxes: dict[str, Path], doors: dict[str, str], *, see
 
     `ready_to_push`는 표지를 본 때에만 참이다. 표지를 쓰지 않는 서버의 200은 받았다는 뜻뿐이라
     참이 되지 않는다(Orin 053 C). 그런 배치에서 200만으로 나아가려면 `received_only`를 명시한다 —
-    그때도 `ready_to_push`는 거짓이고 답에 `received_only`가 따로 실린다."""
+    그때도 `ready_to_push`는 거짓이고 답에 `received_only`가 따로 실린다.
+
+    `trusted_pubkeys`: 이 연구소가 앞서 쓰던 서명 키의 공개키들. 서명은 언제나 `seed`로 한다. 이
+    값은 409에서 서버의 세대가 누구 것인지 가릴 때만 쓴다 — 키를 바꾼 직후에는 서버의 세대가 옛
+    키로 서명돼 있다."""
     hub = Path(hub_dir)
     state_url = f"{drop_url.rstrip('/')}/v0/state"
     pubkey = sp.public_key(seed).hex()
+    own_keys = (pubkey,) + tuple(k for k in _pubkeys(trusted_pubkeys) if k != pubkey) \
+        if trusted_pubkeys else (pubkey,)
     with ho.hub_write_lock(hub):
         rec = load_record(hub)
         rec["outboxes"] = {n: {"dir": str(Path(outboxes[n])), "door": doors.get(n)} for n in outboxes}
@@ -816,7 +841,7 @@ def checkpoint(hub_dir, outboxes: dict[str, Path], doors: dict[str, str], *, see
                 cur = (res["body"].get("generation"), res["body"].get("sha256"))
                 known = _acked(rec, cur[0], cur[1]) if cur[0] else None
                 if known is None and cur != (0, ""):
-                    _raise_409(hub, outboxes, doors, state_url, token, pubkey, cur, timeout)
+                    _raise_409(hub, outboxes, doors, state_url, token, own_keys, cur, timeout)
                 # 칸이 되돌아갔다 — 그 세대와 지문이 내가 200을 받은 기록에 있다(또는 빈 칸으로 돌아갔고
                 # 나는 기록을 갖고 있다). 그 위에 다시 떠서 올린다. 묶음은 통째라 사이의 세대를 되올릴
                 # 필요가 없다.
@@ -876,12 +901,13 @@ def _wait_mark(state_url, token, generation, sha, wait, timeout, sleep, clock,
 
 
 def _raise_409(hub, outboxes, doors, state_url, token, pubkey, cur, timeout) -> None:
-    """기록으로 정해지지 않은 409 — 서버의 지금 세대를 받아 자기 상태와 견주고 멈춘다."""
+    """기록으로 정해지지 않은 409 — 서버의 지금 세대를 받아 자기 상태와 견주고 멈춘다. `pubkey`는 자기
+    공개키와, 준 것이 있으면 이 연구소가 앞서 쓰던 키들이다."""
     st, body = _http(state_url, token, timeout=timeout)
     relation = "unknown"
     if st == 200:
         try:
-            _blob, their_m, their_p = _verify_bundle(body, pubkey, None)
+            _blob, their_m, their_p, _by = _verify_bundle(body, pubkey, None)
             mine = snapshot(hub, outboxes, doors=doors, allow_unexported=True, _locked=True)
             my_m, my_p = unpack(mine)
             if _extends(my_m, my_p, their_m, their_p):
@@ -936,7 +962,7 @@ def body_fits(hub_dir, body: bytes, *, _locked: bool = False) -> dict | None:
 # ── 상태 칸에서 되살리기 ─────────────────────────────────────────────────────
 
 def restore_from_slot(hub_dir, outbox_dirs: dict[str, Path], *, drop_url: str, token: str,
-                      pubkey_hex: str, generation: int | None = None, accept_timeout: bool = False,
+                      pubkey_hex, generation: int | None = None, accept_timeout: bool = False,
                       wait: float = RESTORE_WAIT_SECONDS, timeout: int = hd.CLIENT_TIMEOUT_SECONDS,
                       received_only: bool = False, sleep=time.sleep, clock=time.monotonic) -> dict:
     """상태 칸의 세대에서 되살린다.
@@ -947,6 +973,10 @@ def restore_from_slot(hub_dir, outbox_dirs: dict[str, Path], *, drop_url: str, t
        잇지 않으면 갈라진 것이고 되살리지 않는다.
     3. 복원한다. 받은 세대와 지문을 기록의 첫 줄로 적는다.
     `generation`을 주면 사람이 고른 세대다 — 증인 확인을 하지 않는다.
+
+    `pubkey_hex`는 믿는 공개키 하나, 또는 여럿의 목록이다(0.10.0). 서명 키를 바꾼 연구소는 세대마다
+    서명한 키가 다를 수 있다. 부르는 쪽이 **밖에서 믿은** 키를 모두 준다 — 묶음 안에 적힌 새 키를
+    스스로 믿지 않는다. 어느 세대를 어느 키가 세웠는지는 보고의 `signed_by`에 실린다.
 
     표지를 쓰지 않는 서버는 `settled`도 `mirrored`도 주지 않는다. 그 서버의 묶음은 기본으로 받지
     않는다(Orin 053 C). `received_only`를 명시하면 200만 믿고 받고, 보고에 `received_only`가 실린다."""
@@ -982,7 +1012,9 @@ def restore_from_slot(hub_dir, outbox_dirs: dict[str, Path], *, drop_url: str, t
             raise StateError(f"{waiting}. 정한 시간 안에 풀리지 않았다 — 되살리지 않는다")
         sleep(RESTORE_POLL_SECONDS)
     max_bytes = body.get("max_bytes")
-    blob, manifest, parts = _verify_bundle(body, pubkey_hex, max_bytes)
+    trusted = _pubkeys(pubkey_hex)
+    blob, manifest, parts, by = _verify_bundle(body, trusted, max_bytes)
+    signed_by = {str(body["generation"]): by}
     witnesses = []
     if generation is None:
         superseded = set(manifest.get("supersedes") or [])
@@ -997,7 +1029,8 @@ def restore_from_slot(hub_dir, outbox_dirs: dict[str, Path], *, drop_url: str, t
                 continue                                 # 그 사이에 지워졌다
             if st2 != 200:
                 raise StateError(f"남겨 둔 세대 {k['generation']}을 받지 못했다: HTTP {st2}")
-            _b, wm, wp = _verify_bundle(other, pubkey_hex, max_bytes)
+            _b, wm, wp, wby = _verify_bundle(other, trusted, max_bytes)
+            signed_by[str(k["generation"])] = wby
             if not _extends(wm, wp, manifest, parts):
                 raise StateError(
                     f"갈라졌다 — 지금 세대 {body['generation']}이 남겨 둔 세대 {k['generation']}을 잇지 "
@@ -1017,7 +1050,7 @@ def restore_from_slot(hub_dir, outbox_dirs: dict[str, Path], *, drop_url: str, t
                        for e in manifest.get("outboxes", [])}
     _save_record(hub_dir, rec)
     report.update(generation=body["generation"], sha256=body["sha256"], witnesses=witnesses,
-                  settled=body.get("settled"), mirrored=body.get("mirrored"))
+                  settled=body.get("settled"), mirrored=body.get("mirrored"), signed_by=signed_by)
     if "settled" not in body:
         report["received_only"] = True
     return report

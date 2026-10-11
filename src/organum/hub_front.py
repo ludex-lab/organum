@@ -315,40 +315,46 @@ def _tools() -> list:
     ]
 
 
-class MailFront:
-    """MCP 요청 하나 → 응답 하나. 상태가 없다.
+class _Front:
+    """MCP 요청 하나 → 응답 하나. 상태가 없다. 두 시대, 머리의 검증, 응답의 한도가 여기 있다.
 
-    `grants`: 호출자의 이름 → `Grant`(또는 `{"recipient": …, "doors": […]}`). 이름은 호스팅 층이
-    접근 토큰을 검증해 정한 값이다.
-    `allowed_origins`: 주면 `Origin` 머리가 있는 요청은 그 목록 안이어야 한다(403). None이면 여기서
-    보지 않는다 — 그때는 호스팅 층이 본다.
-    `audit`: 주면 도구가 봉투나 편지를 읽을 때마다 기록 하나를 넘긴다 — 누가(호출자), 어느 문의 몇 번을
-    열었고 어느 것을 내줬는지, 언제. 봉투와 본문의 내용은 싣지 않는다. **기록을 남기지 못하면 내주지
-    않는다**(호출이 오류로 끝난다). 읽는 길이 운영자의 권한으로 도는 배치(버킷의 미러)에서 창구가
-    자기 감사를 남기는 자리다(LxM 157 §5).
-    `modern`: False면 legacy만 말한다. `server/discover`에는 모르는 메서드라고 답하고, 두 시대를 말하는
-    클라이언트는 `initialize`로 물러난다(선행 시험에서 ChatGPT가 그렇게 했다). 클라이언트의 modern
-    쪽이 우리와 맞지 않을 때 호스팅이 내릴 수 있는 스위치다."""
+    도구는 아래 클래스가 낸다: `_tool_defs()`가 도구의 목록을, `_call(params, who, wrap)`이 도구
+    하나의 결과를 낸다. `wrap`은 결과를 보내는 응답으로 싸는 함수이고, 한도는 그 응답의 바이트로
+    잰다(`_fits`). 읽기 창구(`MailFront`)와 초안 창구(`hub_draft.DraftFront`)가 이 위에 선다."""
 
-    def __init__(self, reader, grants: dict, *, name: str = "organum-mail-front",
-                 version: str = __version__, budget_seconds: float = BUDGET_SECONDS,
-                 response_max_bytes: int = RESPONSE_MAX_BYTES, lookback: int = LOOKBACK,
-                 allowed_origins=None, modern: bool = True, audit=None,
-                 clock=time.monotonic, now=time.time):
-        self._reader = reader
+    _instructions = ""
+
+    def _init_front(self, grants: dict, *, name: str, version: str, budget_seconds: float,
+                    response_max_bytes: int, allowed_origins, modern: bool, clock, now,
+                    request_max_bytes: int = REQUEST_MAX_BYTES) -> None:
         self._modern_on = bool(modern)
-        self._grants = {str(k): (v if isinstance(v, Grant) else Grant(v["recipient"], v["doors"]))
-                        for k, v in grants.items()}
+        self._grants = grants
         self._info = {"name": name, "version": version}
         self._budget = float(budget_seconds)
         self._response_max = int(response_max_bytes)
         if self._response_max < RESPONSE_MIN_BYTES:
             raise ValueError(f"response_max_bytes는 {RESPONSE_MIN_BYTES} 이상")
+        self._request_max = int(request_max_bytes)
         self._now = now
-        self._audit = audit
-        self._lookback = max(1, int(lookback))
         self._origins = None if allowed_origins is None else frozenset(allowed_origins)
         self._clock = clock
+
+    def _tool_defs(self) -> list:
+        raise NotImplementedError
+
+    def _call(self, params: dict, who: tuple, wrap):
+        raise NotImplementedError
+
+    @staticmethod
+    def _shaped(out: dict, is_error: bool = False) -> dict:
+        return {"content": [{"type": "text", "text": _dump(out)}], "isError": is_error}
+
+    def _fits(self, result: dict, wrap) -> bool:
+        """보내는 응답의 바이트가 한도 안인가. 도구의 글이 아니라 `wrap`으로 싼 뒤를 잰다."""
+        return len(_dump(wrap(result)).encode("utf-8")) <= self._response_max
+
+    def _left(self, deadline: float) -> float:
+        return deadline - self._clock()
 
     # ── HTTP 한 겹: 소켓 없는 함수다. 호스팅이 자기 웹 앱에서 부른다 ──
     def handle_http(self, method: str, headers: dict, body: bytes, caller) -> tuple[int, dict, bytes]:
@@ -361,7 +367,7 @@ class MailFront:
             status, hdrs, raw = self._http(405, self._error(None, ERR_INVALID_REQUEST,
                                                             "this endpoint accepts POST only"))
             return status, {**hdrs, "Allow": "POST"}, raw
-        if len(body) > REQUEST_MAX_BYTES:
+        if len(body) > self._request_max:
             return self._http(413, self._error(None, ERR_INVALID_REQUEST, "request too large"))
         try:
             message = json.loads(body.decode("utf-8"))
@@ -465,9 +471,9 @@ class MailFront:
                                "_meta": {META_SERVER_INFO: dict(self._info)}}}
         if method == "server/discover":
             result = {"supportedVersions": list(SUPPORTED_VERSIONS), "capabilities": {"tools": {}},
-                      "instructions": INSTRUCTIONS, "ttlMs": TOOLS_TTL_MS, "cacheScope": "private"}
+                      "instructions": self._instructions, "ttlMs": TOOLS_TTL_MS, "cacheScope": "private"}
         elif method == "tools/list":
-            result = {"tools": _tools(), "ttlMs": TOOLS_TTL_MS, "cacheScope": "private"}
+            result = {"tools": self._tool_defs(), "ttlMs": TOOLS_TTL_MS, "cacheScope": "private"}
         elif method == "tools/call":
             result = self._call(params, grant, wrap)
             if isinstance(result, tuple):                # 프로토콜 오류
@@ -516,16 +522,52 @@ class MailFront:
             asked = params.get("protocolVersion")
             result = {"protocolVersion": asked if asked in LEGACY_VERSIONS else LEGACY_VERSIONS[0],
                       "capabilities": {"tools": {}}, "serverInfo": dict(self._info),
-                      "instructions": INSTRUCTIONS}
+                      "instructions": self._instructions}
         elif method == "ping":
             result = {}
         elif method == "tools/list":
-            result = {"tools": _tools()}
+            result = {"tools": self._tool_defs()}
         else:
             result = self._call(params, grant, wrap)
             if isinstance(result, tuple):
                 return 200, self._error(id_, *result)
         return 200, wrap(result)
+
+
+
+class MailFront(_Front):
+    """MCP 요청 하나 → 응답 하나. 상태가 없다.
+
+    `grants`: 호출자의 이름 → `Grant`(또는 `{"recipient": …, "doors": […]}`). 이름은 호스팅 층이
+    접근 토큰을 검증해 정한 값이다.
+    `allowed_origins`: 주면 `Origin` 머리가 있는 요청은 그 목록 안이어야 한다(403). None이면 여기서
+    보지 않는다 — 그때는 호스팅 층이 본다.
+    `audit`: 주면 도구가 봉투나 편지를 읽을 때마다 기록 하나를 넘긴다 — 누가(호출자), 어느 문의 몇 번을
+    열었고 어느 것을 내줬는지, 언제. 봉투와 본문의 내용은 싣지 않는다. **기록을 남기지 못하면 내주지
+    않는다**(호출이 오류로 끝난다). 읽는 길이 운영자의 권한으로 도는 배치(버킷의 미러)에서 창구가
+    자기 감사를 남기는 자리다(LxM 157 §5).
+    `modern`: False면 legacy만 말한다. `server/discover`에는 모르는 메서드라고 답하고, 두 시대를 말하는
+    클라이언트는 `initialize`로 물러난다(선행 시험에서 ChatGPT가 그렇게 했다). 클라이언트의 modern
+    쪽이 우리와 맞지 않을 때 호스팅이 내릴 수 있는 스위치다."""
+
+    _instructions = INSTRUCTIONS
+
+    def __init__(self, reader, grants: dict, *, name: str = "organum-mail-front",
+                 version: str = __version__, budget_seconds: float = BUDGET_SECONDS,
+                 response_max_bytes: int = RESPONSE_MAX_BYTES, lookback: int = LOOKBACK,
+                 allowed_origins=None, modern: bool = True, audit=None,
+                 clock=time.monotonic, now=time.time):
+        self._init_front({str(k): (v if isinstance(v, Grant) else Grant(v["recipient"], v["doors"]))
+                          for k, v in grants.items()},
+                         name=name, version=version, budget_seconds=budget_seconds,
+                         response_max_bytes=response_max_bytes, allowed_origins=allowed_origins,
+                         modern=modern, clock=clock, now=now)
+        self._reader = reader
+        self._audit = audit
+        self._lookback = max(1, int(lookback))
+
+    def _tool_defs(self) -> list:
+        return _tools()
 
     # ── 도구 ──
     def _call(self, params: dict, who: tuple, wrap):
@@ -589,9 +631,6 @@ class MailFront:
         out = {**out, "envelope": None, "sig": None}
         out.pop("envelope_base64", None)
         yield out
-
-    def _left(self, deadline: float) -> float:
-        return deadline - self._clock()
 
     def _mail_list(self, args: dict, grant: Grant, deadline: float, trail: dict) -> dict:
         limit = args.get("limit", LIST_LIMIT_DEFAULT)

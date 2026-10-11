@@ -11,6 +11,7 @@
 8. 자기 편지는 이 hub를 운영하는 연구소가 서명한 것이다. 등록해 둔 상대의 받은 편지는 세지 않는다.
 9. 정상 체크포인트도 문과 번호 → 편지의 대응이 받아들여진 세대 그대로인지 본다.
 10. 표지를 쓰지 않는 서버의 200은 올려도 된다는 답이 아니다. 200만 믿는 것은 이름 붙인 약한 모드다.
+11. 서명 키를 바꾼 연구소의 세대는 밖에서 믿은 키 여럿으로 본다. 묶음 안에 적힌 키는 믿지 않는다(0.10.0).
 
 Jdot HQ의 실험(가짜 원장 39개·상태 칸 33개·v0.8 34개·v0.10 25개)을 출발점으로 삼았다. 그 실험은
 시제품과 모형에 대한 것이었고 이것은 제품 함수에 대한 것이다. 실제 키와 실제 드롭은 쓰지 않는다 —
@@ -40,6 +41,8 @@ SEED = (3).to_bytes(32, "big")              # TESTONLY — BIP340 시험 벡터�
 PUB = sp.public_key(SEED).hex()
 SEED2 = (4).to_bytes(32, "big")             # TESTONLY — 등록해 둔 상대 연구소의 키 노릇
 PUB2 = sp.public_key(SEED2).hex()
+SEED3 = (5).to_bytes(32, "big")             # TESTONLY — 같은 연구소가 바꿔 든 새 서명 키 노릇
+PUB3 = sp.public_key(SEED3).hex()
 DOOR = "hub-ops/from-testonly"
 TOKEN = "tok-test"
 
@@ -543,9 +546,9 @@ def test_rolled_back_slot_is_rebased_from_the_record_with_a_higher_number(tmp_pa
     srv.shutdown()
 
 
-def _place(tmp_path, gen, blob, prev):
+def _place(tmp_path, gen, blob, prev, seed=SEED):
     h = {"generation": gen, "sha256": _sha(blob), "prev_generation": prev[0], "prev_sha256": prev[1],
-         "size": len(blob), "sig": sp.sign(hashlib.sha256(blob).digest(), SEED).hex()}
+         "size": len(blob), "sig": sp.sign(hashlib.sha256(blob).digest(), seed).hex()}
     d = tmp_path / "srv-state" / "testonly"
     d.mkdir(parents=True, exist_ok=True)
     assert hd._state_place(d, h, blob)
@@ -754,6 +757,83 @@ def test_kept_generations_are_witnesses_against_a_stale_higher_generation(tmp_pa
     # 덮은 묶음이 덮인 세대의 지문을 적어 두었으므로 다음 복원은 멈추지 않는다
     assert _restore(tmp_path, url, "after")["generation"] == 10
     assert sha2 != sha9
+    srv.shutdown()
+
+
+def test_restore_crosses_a_change_of_signing_key_with_keys_trusted_from_outside(tmp_path):
+    """서명 키를 바꾼 연구소(0.10.0). 세대 1은 옛 키가, 세대 2는 새 키가 서명했다. 되살리는 쪽이
+    밖에서 믿은 키를 모두 주어야 선다. 묶음 안에 적힌 키는 믿지 않는다(Orin 061)."""
+    srv, url, mdir = _serve(tmp_path)
+    (mdir / "settled").write_bytes(b"")
+    h, out = _hub(tmp_path / "a")
+    _add(h, out, b"one")
+    assert _cp(h, out, url)["generation"] == 1                        # 옛 키로 서명한 세대
+    _mark_state(mdir, 1)
+    _add(h, out, b"two")
+    boxes, doors = {"out-hub-ops": out}, {"out-hub-ops": DOOR}
+    r = hs.checkpoint(h, boxes, doors, seed=SEED3, drop_url=url, token=TOKEN, wait=0,
+                      sleep=lambda s: None)                            # 새 키로 서명한 세대
+    assert r["generation"] == 2
+    _mark_state(mdir, 2)
+
+    def restore(name, keys, **kw):
+        return hs.restore_from_slot(tmp_path / name / "hub", {"out-hub-ops": tmp_path / name / "out"},
+                                    drop_url=url, token=TOKEN, pubkey_hex=keys, wait=0,
+                                    sleep=lambda s: None, **kw)
+    # 옛 키만 믿으면 지금 세대가 서지 않고, 새 키만 믿으면 증인인 세대 1이 서지 않는다
+    for name, keys in (("r-old", PUB), ("r-new", [PUB3])):
+        with pytest.raises(hs.StateError, match="서명"):
+            restore(name, keys)
+        assert not (tmp_path / name / "hub").exists()
+    report = restore("r-both", [PUB, PUB3])
+    assert report["generation"] == 2 and report["witnesses"] == [1]
+    assert report["signed_by"] == {"2": PUB3, "1": PUB}               # 어느 세대를 어느 키가 세웠는가
+    assert _files(tmp_path / "r-both" / "out") == _files(out)
+    # 사람이 고른 세대는 그 세대를 세운 키만으로 선다
+    assert restore("r-gen1", PUB, generation=1)["signed_by"] == {"1": PUB}
+    # 믿는 키의 모양이 틀리면 묻기 전에 멈춘다
+    for bad in ([], None, "zz", [PUB, "11"], 7, [PUB, PUB3, "11"], [PUB, PUB3, PUB3.upper()]):
+        with pytest.raises(hs.StateError):
+            restore("r-bad", bad)
+        assert not (tmp_path / "r-bad" / "hub").exists()
+    # 상태 칸에 쓸 수 있는 누군가가 낯선 키로 서명한 세대를 올렸다. 묶음 안의 hub.json은 그 키를
+    # 이 연구소의 키라고 적고 있다. 되살리는 쪽은 그 말을 믿지 않는다
+    evil = (6).to_bytes(32, "big")
+    shutil.copytree(tmp_path / "a", tmp_path / "evil")
+    cfg = json.loads((tmp_path / "evil" / "hub" / "hub.json").read_text(encoding="utf-8"))
+    cfg["keys"].append({"pubkey": sp.public_key(evil).hex(), "signer_id": "lab:testonly",
+                        "key_id": "k9", "key_epoch": 1})
+    (tmp_path / "evil" / "hub" / "hub.json").write_text(json.dumps(cfg), encoding="utf-8")
+    g3 = hs.snapshot(tmp_path / "evil" / "hub", {"out-hub-ops": tmp_path / "evil" / "out-hub-ops"},
+                     doors=doors, generation=3)
+    _place(tmp_path, 3, g3, (2, r["sha256"]), seed=evil)
+    _mark_state(mdir, 3)
+    with pytest.raises(hs.StateError, match="서명"):
+        restore("r-evil", [PUB, PUB3])
+    assert not (tmp_path / "r-evil" / "hub").exists()
+    srv.shutdown()
+
+
+def test_a_409_after_a_key_change_is_read_with_the_older_keys_too(tmp_path):
+    """키를 바꾼 직후에는 서버의 세대가 옛 키로 서명돼 있다. 옛 키를 함께 주면 409를 「누구 것인지
+    모른다」가 아니라 「갈라졌다」로 읽는다. 어느 쪽이든 멈춘다. 서명은 언제나 자기 씨앗으로 한다."""
+    srv, url, _ = _serve(tmp_path, marks=False)
+    h, out = _hub(tmp_path / "a")
+    _add(h, out, b"one")
+    assert _cp(h, out, url)["generation"] == 1
+    shutil.copytree(tmp_path / "a", tmp_path / "b")                    # 같은 세대에서 갈라진 둘
+    hb, outb = tmp_path / "b" / "hub", tmp_path / "b" / "out-hub-ops"
+    _add(h, out, b"old side")
+    assert _cp(h, out, url)["generation"] == 2                        # 옛 키의 자리가 먼저 올렸다
+    _add(hb, outb, b"new side")
+    cp = lambda **kw: hs.checkpoint(hb, {"out-hub-ops": outb}, {"out-hub-ops": DOOR}, seed=SEED3,   # noqa: E731
+                                    drop_url=url, token=TOKEN, wait=0, sleep=lambda s: None, **kw)
+    with pytest.raises(hs.CheckpointStopped) as e:
+        cp()
+    assert e.value.reason == "unverifiable"
+    with pytest.raises(hs.CheckpointStopped) as e:
+        cp(trusted_pubkeys=[PUB])
+    assert e.value.reason == "diverged"
     srv.shutdown()
 
 

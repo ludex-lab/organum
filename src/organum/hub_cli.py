@@ -11,6 +11,8 @@
     organum-hub admit --dir hub --envelope their.json --sig … --pubkey …   # 상대 봉투
     organum-hub prove --dir hub --event-id …      # 포함 증명 → verify-proof로 오프라인 검증
     organum-hub rotate-key / revoke-key / was-valid                        # key lifecycle
+    organum-hub rotate-key … --unsigned-out env.json   # 봉투만 낸다 — 키가 다른 기기에 있을 때(sign → admit)
+    organum-hub pin-lifecycle --dir hub --signer lab:x --key-id k1 --epoch 1   # 그 signer의 키 기록은 이 키의 서명만
     organum-hub serve / push / pull / channels    # git 없는 전달 — HTTP 우체통(drop v0)
     organum-hub check-tokens --token-file …       # 서버용 토큰 파일 검사(범위·id, 값은 안 찍음)
     organum-hub snapshot / restore / reconcile / checkpoint   # 원장과 발신함을 묶음으로 — 저장·복원·대조·상태 칸
@@ -321,15 +323,33 @@ def cmd_verify_envelope(a):
     return 0 if ok else 1
 
 
+def _sign_here_or_elsewhere(a, d, cfg, hub, env) -> int:
+    """키가 이 자리에 있으면 서명해 넣는다. `--unsigned-out`이면 봉투만 내놓는다(0.10.0) — 서명 키가
+    다른 기기에 있을 때 쓴다: 그 기기에서 `sign`으로 서명하고, 여기서 `admit`으로 넣는다. 원장은
+    건드리지 않는다."""
+    if bool(a.key) == bool(a.unsigned_out):
+        raise HubCliError("--key 또는 --unsigned-out 중 하나만")
+    if a.unsigned_out:
+        out = Path(a.unsigned_out)
+        if out.exists():
+            raise HubCliError(f"{out} 이미 존재 — 덮어쓰지 않는다")
+        raw = he.canonical_bytes(env)
+        out.write_bytes(raw)
+        print(json.dumps({"unsigned": str(out), "envelope_sha256": hashlib.sha256(raw).hexdigest(),
+                          "event_kind": env["event_kind"], "signer": env["signer"]},
+                         ensure_ascii=False))
+        return 0
+    return _sign_admit(d, cfg, hub, env, _read_seed(a.key))
+
+
 def cmd_rotate_key(a):
-    seed = _read_seed(a.key)
     d, cfg, hub = _load(a.dir)
     env = _build_envelope(cfg, "key.rotated",
                           {"new_key_id": a.new_key_id, "new_key_epoch": a.new_epoch,
                            "new_pubkey": a.new_pubkey},
                           signer=a.signer, key_id=a.key_id, epoch=a.epoch,
                           subject={"type": "machine", "id": "machine:" + cfg["machine_id"]})
-    return _sign_admit(d, cfg, hub, env, seed)
+    return _sign_here_or_elsewhere(a, d, cfg, hub, env)
 
 
 def cmd_introduce_signer(a):
@@ -351,14 +371,22 @@ def cmd_introduce_signer(a):
 
 
 def cmd_revoke_key(a):
-    seed = _read_seed(a.key)
     d, cfg, hub = _load(a.dir)
     env = _build_envelope(cfg, "key.revoked",
                           {"key_id": a.revoke_key_id, "key_epoch": a.revoke_epoch,
                            "reason": a.reason},
                           signer=a.signer, key_id=a.key_id, epoch=a.epoch,
                           subject={"type": "machine", "id": "machine:" + cfg["machine_id"]})
-    return _sign_admit(d, cfg, hub, env, seed)
+    return _sign_here_or_elsewhere(a, d, cfg, hub, env)
+
+
+def cmd_pin_lifecycle(a):
+    """이 원장이 그 signer의 키 수명 기록을 이 결속의 서명으로만 받게 한다(0.10.0). 이 소비자의
+    수용 규칙이고 hub.json에 적힌다. 원장에 사건을 더하지 않는다."""
+    out = _ops(ho.pin_lifecycle, a.dir, signer=a.signer, key_id=a.key_id, epoch=a.epoch,
+               pubkey=a.pubkey)
+    print(json.dumps(out, ensure_ascii=False, indent=1))
+    return 0
 
 
 def cmd_export(a):
@@ -556,7 +584,8 @@ def cmd_restore(a):
         report = _state(hs.restore, Path(a.snapshot).read_bytes(), a.dir, dirs)
     else:
         if not (a.token_file and a.pubkey):
-            raise HubCliError("상태 칸에서 되살리려면 --token-file과 --pubkey(자기 공개키)가 필요하다")
+            raise HubCliError("상태 칸에서 되살리려면 --token-file과 --pubkey(믿는 공개키, 여럿이면 "
+                              "되풀이해 준다)가 필요하다")
         token = hd.load_tokens(a.token_file)[0]
         report = _state(hs.restore_from_slot, a.dir, dirs, drop_url=a.url, token=token,
                         pubkey_hex=a.pubkey, generation=a.generation,
@@ -597,7 +626,8 @@ def cmd_checkpoint(a):
     with_body = Path(a.with_body).read_bytes() if a.with_body else None
     r = _state(hs.checkpoint, a.dir, dirs, doors, seed=_read_seed(a.key), drop_url=a.url,
                token=token, onto=onto, dry_run=a.dry_run, with_body=with_body, wait=a.wait,
-               timeout=a.timeout, received_only=a.received_only)
+               timeout=a.timeout, received_only=a.received_only,
+               trusted_pubkeys=a.trusted_pubkey)
     print(json.dumps(r, ensure_ascii=False))
     if a.dry_run:
         return 0 if r["fits"] else 3
@@ -763,7 +793,7 @@ def main(argv=None) -> int:
                                   ("--snapshot", {"default": None}),
                                   ("--url", {"default": None}),
                                   ("--token-file", {"default": None}),
-                                  ("--pubkey", {"default": None}),
+                                  ("--pubkey", {"action": "append", "default": None}),
                                   ("--generation", {"type": int, "default": None}),
                                   ("--accept-timeout", {"action": "store_true"}),
                                   ("--received-only", {"action": "store_true"}),
@@ -779,6 +809,7 @@ def main(argv=None) -> int:
         ("checkpoint", cmd_checkpoint, [("--dir", {"required": True}),
                                         ("--outbox", {"action": "append", "required": True}),
                                         ("--key", {"required": True}),
+                                        ("--trusted-pubkey", {"action": "append", "default": None}),
                                         ("--url", {"required": True}),
                                         ("--token-file", {"required": True}),
                                         ("--onto", {"default": None}),
@@ -813,7 +844,8 @@ def main(argv=None) -> int:
                                       "default": hd.CLIENT_TIMEOUT_SECONDS}),
                                     ("--no-warmup", {"action": "store_true"})]),
         ("rotate-key", cmd_rotate_key, [("--dir", {"required": True}),
-                                        ("--key", {"required": True}),
+                                        ("--key", {"default": None}),
+                                        ("--unsigned-out", {"default": None}),
                                         ("--signer", {"required": True}),
                                         ("--key-id", {"required": True}),
                                         ("--epoch", {"type": int, "required": True}),
@@ -831,13 +863,19 @@ def main(argv=None) -> int:
           ("--new-epoch", {"type": int, "required": True}),
           ("--new-pubkey", {"required": True})]),
         ("revoke-key", cmd_revoke_key, [("--dir", {"required": True}),
-                                        ("--key", {"required": True}),
+                                        ("--key", {"default": None}),
+                                        ("--unsigned-out", {"default": None}),
                                         ("--signer", {"required": True}),
                                         ("--key-id", {"required": True}),
                                         ("--epoch", {"type": int, "required": True}),
                                         ("--revoke-key-id", {"required": True}),
                                         ("--revoke-epoch", {"type": int, "required": True}),
                                         ("--reason", {"default": "rotated out"})]),
+        ("pin-lifecycle", cmd_pin_lifecycle, [("--dir", {"required": True}),
+                                              ("--signer", {"required": True}),
+                                              ("--key-id", {"required": True}),
+                                              ("--epoch", {"type": int, "required": True}),
+                                              ("--pubkey", {"default": None})]),
         ("list", cmd_list, [("--dir", {"required": True})]),
         ("was-valid", cmd_was_valid, [("--dir", {"required": True}),
                                       ("--pubkey", {"required": True}),

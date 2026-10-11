@@ -68,18 +68,21 @@ def now_z() -> str:
 # ── 쓰기 직렬화(Orin 041 R1) ─────────────────────────────────────────────────
 
 @contextlib.contextmanager
-def hub_write_lock(dirpath):
+def hub_write_lock(dirpath, *, name: str | None = None):
     """상태 디렉터리의 **쓰기 임계구역** — load/replay 전부터 idempotency 확인·append(그리고
     호출자의 outbox 배정)까지 한 락 아래 둔다. O_EXCL은 같은 파일명의 덮어쓰기만 막지 원장
     중복을 막지 못한다(041 R1: 각자 stale hub를 읽은 두 writer가 같은 이벤트를 두 번 append해
     로그를 재생 불가로 만들었다). 락은 파일 락(POSIX flock / Windows msvcrt.locking)이라
     프로세스·스레드 모두 직렬화한다. 디렉터리가 없으면 잠글 것이 없다(load_hub가 종전
-    문구로 거절한다)."""
+    문구로 거절한다).
+
+    `name`: 다른 이름의 락 파일(0.10.0). 원장 쓰기를 **여러 번 감싸는** 바깥 임계구역에 쓴다 —
+    이 락은 다시 들어갈 수 없어서, 안에서 원장 락을 잡는 함수를 부르려면 이름이 달라야 한다."""
     d = Path(dirpath)
     if not d.is_dir():
         yield
         return
-    fd = os.open(d / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(d / (name or LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o600)
     try:
         if fcntl is not None:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -137,11 +140,20 @@ def load_hub(dirpath, *, receipt_seckey=None):
     for k in cfg["keys"]:
         keys.register(k["pubkey"], signer_id=k["signer_id"], key_id=k["key_id"],
                       key_epoch=k["key_epoch"])
-    hub = he.HubIndex(
-        key_registry=keys,
-        claim_registry=he.ClaimRegistry(claims_doc, expected_sha256=cfg["claims_sha256"]),
-        log=hl.TransparencyLog(), receipt_seckey=receipt_seckey,
-        source_domain=cfg["source_domain"])
+    # 고정의 칸이 **없는 것**과 **있는데 null인 것**을 가른다(Orin 062 R2). 없는 것은 0.9.0의 원장이다.
+    # null은 틀린 설정이다 — 없는 것으로 읽으면 걸어 둔 규칙이 조용히 빠진다. 비우려면 빈 목록을 적는다.
+    pins = cfg["lifecycle_pins"] if "lifecycle_pins" in cfg else []
+    if not isinstance(pins, list):
+        raise HubOpsError("hub.json을 열지 못함: lifecycle_pins는 목록이어야 한다"
+                          "(null도 아니다. 고정이 없으면 칸을 빼거나 빈 목록을 적는다)")
+    try:
+        hub = he.HubIndex(
+            key_registry=keys,
+            claim_registry=he.ClaimRegistry(claims_doc, expected_sha256=cfg["claims_sha256"]),
+            log=hl.TransparencyLog(), receipt_seckey=receipt_seckey,
+            source_domain=cfg["source_domain"], lifecycle_pins=pins)
+    except he.HubEnvelopeError as e:
+        raise HubOpsError(f"hub.json을 열지 못함: {e}")
     log_p = d / "events.jsonl"
     if log_p.is_file():
         for i, line in enumerate(log_p.read_text(encoding="utf-8").splitlines(), 1):
@@ -166,6 +178,40 @@ def admit_and_log(d, hub, raw: bytes, sig_hex: str, pubkey_hex: str) -> dict:
         append_record(d, {"transport": "direct", "raw": raw.decode("utf-8"),
                           "sig": sig_hex, "pubkey": pubkey_hex})
     return r
+
+
+# ── 키 수명 기록의 고정(0.10.0) ───────────────────────────────────────────────
+
+def pin_lifecycle(dirpath, *, signer: str, key_id: str, epoch: int, pubkey: str | None = None) -> dict:
+    """이 원장이 `signer`의 키 수명 기록(`key.rotated`·`key.revoked`)을 **이 결속의 서명으로만** 받게
+    한다. 원장의 사건이 아니라 이 소비자의 수용 규칙이다(hub.json에 적는다).
+
+    결속은 이 원장이 이미 믿는 것이어야 한다 — registry에 있고 지금 유효해야 한다. `pubkey`를 주면
+    registry의 값과 같은지 본다(다른 길로 확인한 값과 맞대는 자리다). 고정은 다음 좌표부터 든다:
+    앞서 받아들인 기록은 재생에서 그대로 선다."""
+    with hub_writer(dirpath) as (d, cfg, hub):
+        mine = [b for b in hub.keys.bindings_of(signer)
+                if (b["key_id"], b["key_epoch"]) == (key_id, epoch)]
+        if not mine:
+            raise HubOpsError(f"{signer}의 ({key_id}, epoch {epoch}) 결속이 이 원장에 없다 — "
+                              "믿는 결속만 고정할 수 있다")
+        bound = mine[0]
+        nxt = hub.log.tree_size + 1
+        if bound["revoked_at_seq"] is not None or bound["valid_from_seq"] > nxt:
+            raise HubOpsError("그 결속은 지금 유효하지 않다 — 폐기됐거나 아직 효력 전이다")
+        if pubkey is not None and pubkey != bound["pubkey"]:
+            raise HubOpsError(f"준 공개키가 원장의 결속과 다르다 — 원장 {bound['pubkey'][:16]}…, "
+                              f"준 값 {pubkey[:16]}…")
+        pin = {"signer_id": signer, "key_id": key_id, "key_epoch": epoch,
+               "pubkey": bound["pubkey"], "from_seq": nxt}
+        pins = list(cfg.get("lifecycle_pins") or [])
+        same = [p for p in pins if all(p[k] == pin[k] for k in ("signer_id", "key_id", "key_epoch", "pubkey"))]
+        if same:
+            return {"pinned": same[0], "already": True}
+        cfg["lifecycle_pins"] = pins + [pin]
+        (d / "hub.json").write_text(json.dumps(cfg, ensure_ascii=False, indent=1) + "\n",
+                                    encoding="utf-8")
+        return {"pinned": pin, "already": False}
 
 
 # ── 봉투 빌더(순수) ──────────────────────────────────────────────────────────

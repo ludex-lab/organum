@@ -654,6 +654,30 @@ class KeyRegistry:
         return dict(e, revoked=e["revoked_at_seq"] is not None)
 
 
+_PIN_KEYS = {"signer_id", "key_id", "key_epoch", "pubkey", "from_seq"}
+
+
+def _lifecycle_pins_by_signer(pins) -> dict:
+    """hub.json의 `lifecycle_pins` → signer별 목록. 모양이 틀리면 거부한다(fail-closed) — 고정이
+    조용히 빠진 채 원장이 열리면 그 규칙이 없는 것과 같다."""
+    out: dict = {}
+    if pins is None:
+        return out
+    if not isinstance(pins, list):
+        raise HubEnvelopeError("lifecycle_pins는 목록")
+    for p in pins:
+        if not (isinstance(p, dict) and set(p) == _PIN_KEYS
+                and _is_str(p["signer_id"]) and _LAB_ID.fullmatch(p["signer_id"])
+                and _is_str(p["key_id"]) and _KEY_ID.fullmatch(p["key_id"])
+                and type(p["key_epoch"]) is int and p["key_epoch"] >= 1
+                and _is_str(p["pubkey"]) and _HEX64.fullmatch(p["pubkey"])
+                and type(p["from_seq"]) is int and p["from_seq"] >= 1):
+            raise HubEnvelopeError("lifecycle_pins 항목의 모양이 틀림"
+                                   "(signer_id·key_id·key_epoch·pubkey·from_seq)")
+        out.setdefault(p["signer_id"], []).append(dict(p))
+    return out
+
+
 def idempotency_fingerprint(raw: bytes) -> str:
     """exact signed content bytes의 SHA-256(§3). 서버 부여 필드는 애초에 봉투 밖이라
     fingerprint에 들어올 수 없다."""
@@ -680,9 +704,10 @@ class HubIndex:
 
     def __init__(self, *, key_registry: KeyRegistry, claim_registry: ClaimRegistry,
                  log=None, receipt_seckey: bytes = None,
-                 source_domain: str = "organum-hub/local"):
+                 source_domain: str = "organum-hub/local", lifecycle_pins=None):
         if receipt_seckey is not None and log is None:
             raise HubEnvelopeError("relay receipt는 log 결속 없이 발행할 수 없다")
+        self._lifecycle_pins = _lifecycle_pins_by_signer(lifecycle_pins)
         self.keys = key_registry
         self.claims = claim_registry
         self._log = log                     # 주입식 — hub_log.TransparencyLog 호환
@@ -796,6 +821,8 @@ class HubIndex:
         # ③ 정책 3: kind/claim — 예외도 fail-closed(B3).
         try:
             problems, projected, reason = self._policy(env)
+            # 키 수명 기록의 고정(0.10.0, Orin 061 ②): registry를 바꾸는 admit **앞**에서 본다.
+            problems = self._lifecycle_pin_problems(env, pubkey_hex, at_seq=self._seq + 1) + problems
         except HubEnvelopeError as e:
             problems, projected, reason = [str(e)], False, None
         except Exception as e:                       # noqa: BLE001 — ingress fail-closed
@@ -869,6 +896,24 @@ class HubIndex:
                 (s["id"], s["key_id"], s["key_epoch"]):
             return ["inner signer ≠ outer key registry 결속(exact 일치 실패)"]
         return []
+
+    def _lifecycle_pin_problems(self, env: dict, pubkey_hex: str, *, at_seq: int) -> list:
+        """이 소비자가 고정해 둔 signer의 키 수명 기록(`key.rotated`·`key.revoked`)은 고정한 결속의
+        서명만 받는다. 형식은 한 signer의 유효한 키를 가리지 않는다 — 위임받은 키가 새 키를 들이거나
+        남의 키를 끊는 것을 막는 것은 이 소비자의 수용 규칙이다. 이름(`key_id`)만 견주지 않고
+        이미 신뢰한 공개키·epoch와 맞댄다. 고정은 그것을 건 좌표(`from_seq`)부터 든다 — 그 앞의
+        기록은 재생에서 그대로 선다."""
+        if env["event_kind"] not in ("key.rotated", "key.revoked"):
+            return []
+        pins = [p for p in self._lifecycle_pins.get(env["signer"]["id"], ())
+                if p["from_seq"] <= at_seq]
+        if not pins:
+            return []
+        s = env["signer"]
+        for p in pins:
+            if (p["pubkey"], p["key_id"], p["key_epoch"]) == (pubkey_hex, s["key_id"], s["key_epoch"]):
+                return []
+        return ["이 signer의 키 수명 기록은 고정한 키의 서명만 받는다(lifecycle pin)"]
 
     def _policy(self, env: dict) -> tuple:
         """kind/claim 정책. 반환 (problems, authority_projected, authority_reason)."""
