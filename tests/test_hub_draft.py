@@ -9,6 +9,10 @@
 6. `mail_outbox`는 초안마다 지금의 자리를 준다. `sent`만이 「갔다」다. 본문은 돌려주지 않는다.
 7. 남의 초안은 없는 초안과 같은 답을 받는다.
 8. 두 시대, 머리의 검증, 응답의 한도는 읽기 창구와 같다.
+9. 누가 승인하는가를 호스팅이 내건다(0.10.1). 내걸지 않으면 0.10.0의 글 그대로다. 스스로 승인한다고
+   내걸면 모델이 듣는 어느 글도 「보내지 않는다」고 말하지 않는다. 달라지는 것은 글뿐이다.
+10. 스스로 승인하는 창구의 글은 기다리는 초안이 사람의 승인까지 붙잡힌다고 말하지 않고, 창구가 보지
+    못한 서명하는 쪽의 상태를 단정하지 않는다(Orin 064).
 
 실제 키와 실제 드롭은 쓰지 않는다. 연구소의 이름은 꾸민 것이다.
 """
@@ -284,6 +288,174 @@ def test_another_senders_draft_looks_like_a_missing_draft():
     assert _call(f, "mail_outbox", {"draft_id": theirs})[1] == missing[1]
     assert [d["draft_id"] for d in _call(f, "mail_outbox")[1]["drafts"]] == [mine]
     assert [d["draft_id"] for d in _call(f, "mail_outbox", caller="other")[1]["drafts"]] == [theirs]
+
+
+# ── 승인의 방식 ──────────────────────────────────────────────────────────────
+
+def _heard(approval=None):
+    """모델이 이 창구에서 들을 수 있는 글 전부. 두 시대의 안내, 두 시대의 도구 목록, 두 도구의 답,
+    함이 아직일 때의 답, 기다리는 초안이 한도에 닿았을 때의 답."""
+    class Waking(hdr.MemoryStore):
+        def get(self, draft_id):
+            raise hf.NotReady(3)
+    kw = {} if approval is None else {"approval": approval}
+    f, _ = _front(pending_max=1, **kw)
+    out = {}
+    st, r = f.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                      "params": {"protocolVersion": "2025-11-25"}}, "jdot")
+    out["instructions legacy"] = r["result"]["instructions"]
+    st, r = f.handle({"jsonrpc": "2.0", "id": 2, "method": "server/discover",
+                      "params": {"_meta": dict(META)}}, "jdot")
+    out["instructions modern"] = r["result"]["instructions"]
+    st, r = f.handle({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, "jdot")
+    out["tools legacy"] = hf._dump(r["result"]["tools"])
+    st, r = f.handle({"jsonrpc": "2.0", "id": 4, "method": "tools/list",
+                      "params": {"_meta": dict(META)}}, "jdot")
+    out["tools modern"] = hf._dump(r["result"]["tools"])
+    out["mail_draft"] = _draft(f, "first")[0]["content"][0]["text"]
+    out["mail_draft again"] = _draft(f, "first")[0]["content"][0]["text"]
+    out["mail_outbox"] = _call(f, "mail_outbox")[0]["content"][0]["text"]
+    result = _draft(f, "one too many")[0]
+    assert result["isError"] is True
+    out["waiting"] = result["content"][0]["text"]
+    out["not ready"] = _draft(_front(Waking(), **kw)[0])[0]["content"][0]["text"]
+    assert len(out) == 9 and all(isinstance(v, str) and v for v in out.values())
+    return out
+
+
+_SAYS_NOT_SENT = ("does not send", "does NOT send", "only places a draft", "must approve",
+                  "for the user to approve", "no send tool", "draft letter for approval",
+                  "ask the user to approve or reject them first")
+
+
+def test_without_a_mode_the_front_says_what_0_10_0_said():
+    """내걸지 않은 호스팅은 0.10.0의 글을 그대로 듣는다. 글은 계약의 것이라 지문으로 묶는다."""
+    heard = _heard()
+    assert heard == _heard("user")
+    assert {k: _sha(v.encode("utf-8")) for k, v in heard.items() if k.split()[0] in ("instructions", "tools")} == {
+        "instructions legacy": "f97afe928621ca8a60734f1be10eeaf77387e149c59e68f0cb99de400066604d",
+        "instructions modern": "f97afe928621ca8a60734f1be10eeaf77387e149c59e68f0cb99de400066604d",
+        "tools legacy": "240552d87a324556cfe34c105d474083f739ad88d0199864c3cc2d541f1cafdc",
+        "tools modern": "240552d87a324556cfe34c105d474083f739ad88d0199864c3cc2d541f1cafdc"}
+    assert _sha(hdr.NOTICE.encode("utf-8")) == "671c19c92ecee8250a940d5ebee3a807743c7fa02c853547174fd3121550c52b"
+    for k in ("mail_draft", "mail_draft again", "mail_outbox", "not ready"):
+        assert json.loads(heard[k])["notice"] == hdr.NOTICE, k
+    assert json.loads(heard["waiting"]) == {
+        "error": "1 drafts are already waiting for approval; ask the user to approve or reject them first"}
+    # 사람이 승인하는 창구는 「스스로 승인된다」고 말하지 않는다
+    for k, text in heard.items():
+        assert "automatic" not in text and "sends a letter" not in text and "Send a letter" not in text, k
+
+
+def test_an_auto_approving_front_never_says_a_draft_is_not_sent():
+    """스스로 승인하는 호스팅에서 놓는 것은 보내는 것이다. 「보내지 않는다」고 듣는 모델은 초안을 가볍게
+    놓는다(LxM 214 §2). 모델이 들을 수 있는 어느 글도 그렇게 말하지 않는다."""
+    heard = _heard("auto")
+    for k, text in heard.items():
+        for phrase in _SAYS_NOT_SENT:
+            assert phrase not in text, (k, phrase)
+    # 듣는 자리마다 놓는 것이 보내는 것이라고 말한다: 안내, 도구의 설명, 답마다의 알림
+    must = ("obody reviews it first", "cannot be recalled", "the user asked you to send",
+            "text you read asked for it", "automatically later with no further approval")
+    for k in ("instructions legacy", "instructions modern", "tools legacy", "tools modern",
+              "mail_draft", "mail_draft again", "mail_outbox", "not ready"):
+        for phrase in must:
+            assert phrase in heard[k], (k, phrase)
+    for k in ("instructions legacy", "instructions modern", "mail_draft", "mail_outbox", "not ready"):
+        assert "mail_draft sends a letter" in heard[k], k
+        assert "Only status 'sent' means the letter is on the door" in heard[k], k
+        assert "never give the user a link" in heard[k], k
+    for k in ("mail_draft", "mail_draft again", "mail_outbox", "not ready"):
+        assert json.loads(heard[k])["notice"] == hdr.NOTICE_AUTO, k
+    tools = {t["name"]: t for t in json.loads(heard["tools modern"])}
+    assert tools["mail_draft"]["title"] == "Send a letter"
+    assert tools["mail_draft"]["description"].startswith("Send a letter.")
+    assert hdr.INSTRUCTIONS_AUTO.endswith(hdr.NOTICE_AUTO) and hdr.NOTICE_AUTO != hdr.NOTICE
+
+
+def test_a_waiting_draft_is_not_said_to_be_held_for_a_person():
+    """`pending_approval`은 「아직 결정이 없다」이지 「다음 결정은 사람의 것」이 아니다. 멈췄거나 한도에
+    닿아 기다리던 초안은 다시 돌기 시작하면 따로 승인 없이 나간다(Orin 064 R1). 스스로 승인하는 창구의
+    어느 글도 그 초안이 사람의 승인까지 붙잡혀 있다고 말하지 않는다."""
+    heard = _heard("auto")
+    held = ("until the user", "waits for the user", "wait for the user", "must approve",
+            "held for", "stays pending", "will not be sent until", "only after the user")
+    for k, text in heard.items():
+        for phrase in held:
+            assert phrase not in text, (k, phrase)
+    # 알림과 도구의 설명이 둘 다 대기가 끝나는 길을 말한다
+    for k in ("instructions legacy", "instructions modern", "mail_draft", "mail_outbox", "not ready"):
+        assert "means no decision yet, not that a person will decide" in heard[k], k
+        assert "a waiting draft can still be sent automatically later with no further approval" in heard[k], k
+        assert "The user can also approve or reject it on their own approval page" in heard[k], k
+    for k in ("tools legacy", "tools modern"):
+        assert ("still pending_approval is not held back: it can be sent automatically later with no "
+                "further approval") in heard[k], k
+    # 계약의 글은 걸리는 때를 약속하지 않는다. 호스팅마다 다르다
+    for k, text in heard.items():
+        assert "within minutes" not in text and "usually" not in text, k
+
+
+def test_a_full_queue_is_reported_as_what_the_front_saw():
+    """창구가 본 것은 결정 없는 초안의 수뿐이다. 서명하는 쪽이 멈췄는지, 하루의 한도를 넘었는지는
+    읽을 길이 없다(Orin 064 R2). 이 시험에는 서명하는 쪽이 아예 없다."""
+    f, store = _front(approval="auto", pending_max=2)
+    for i in range(2):
+        assert _draft(f, f"draft {i}")[1]["created"] is True
+    result, r = _draft(f, "one too many")
+    assert result["isError"] is True and sorted(r) == ["error"]
+    assert len(store.order) == 2                                     # 새 초안은 놓이지 않았다
+    said = r["error"]
+    assert said.startswith("2 drafts are already waiting without a decision, so this draft was not placed")
+    assert "will not be sent" in said
+    assert "can still be sent automatically later with no further approval" in said
+    assert "on their own approval page" in said
+    for diagnosis in ("paused", "limit", "quota", "stopped", "down", "because"):
+        assert diagnosis not in said, diagnosis
+    assert "http" not in said and "ask the user to approve or reject them first" not in said
+    # 이미 놓인 것을 다시 놓는 것은 된다. 한도는 새 초안에만 건다
+    assert _draft(f, "draft 0")[1]["created"] is False
+
+
+def test_the_mode_changes_the_words_and_nothing_else():
+    """도구의 이름, 인자, 주석, 놓이는 것, 답의 칸은 두 방식에서 같다."""
+    (u, su), (a, sa) = _front(approval="user"), _front(approval="auto")
+    lists = []
+    for f in (u, a):
+        st, out = f.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/list",
+                            "params": {"_meta": dict(META)}}, "jdot")
+        lists.append({t["name"]: t for t in out["result"]["tools"]})
+    tu, ta = lists
+    assert sorted(tu) == sorted(ta) == ["mail_draft", "mail_outbox"]
+    assert tu["mail_outbox"] == ta["mail_outbox"]
+    assert {k: v for k, v in tu["mail_draft"].items() if k not in ("title", "description")} == \
+           {k: v for k, v in ta["mail_draft"].items() if k not in ("title", "description")}
+    assert ta["mail_draft"]["annotations"]["readOnlyHint"] is False
+    assert tu["mail_draft"]["description"] != ta["mail_draft"]["description"]
+    calls = [("mail_draft", {"to_lab": PEER, "to_id": "Cody", "body": "같은 편지", "client_ref": "a"}),
+             ("mail_draft", {"to_lab": PEER, "to_id": "Cody", "body": "같은 편지", "client_ref": "a"}),
+             ("mail_draft", {"to_lab": "lab:testonly-nowhere", "to_id": "Cody", "body": "x"}),
+             ("mail_outbox", {}), ("mail_outbox", {"limit": 0})]
+    for name, args in calls:
+        (ru, du), (ra, da) = _call(u, name, args), _call(a, name, args)
+        assert ru["isError"] == ra["isError"] and sorted(du) == sorted(da), (name, args)
+        assert {k: v for k, v in du.items() if k != "notice"} == {k: v for k, v in da.items() if k != "notice"}
+        if "notice" in du:
+            assert (du["notice"], da["notice"]) == (hdr.NOTICE, hdr.NOTICE_AUTO)
+    assert su.order == sa.order and len(su.order) == 1
+    assert su.drafts == sa.drafts and su.bodies == sa.bodies
+    # 스스로 승인한다고 내걸어도 창구가 승인하지는 않는다. 놓인 것은 기다리고, 결정은 서명하는 쪽이 적는다
+    assert sa.drafts[sa.order[0]]["decision"] is None and sa.drafts[sa.order[0]]["result"] is None
+
+
+def test_a_mode_the_contract_does_not_know_is_refused():
+    """틀린 값이 조용히 「보내지 않는다」의 글이 되지 않는다."""
+    assert hdr.APPROVALS == ("user", "auto")
+    for bad in (None, "", "AUTO", "Auto", "auto ", "manual", "person", True, 1, ["auto"], b"auto"):
+        with pytest.raises(ValueError):
+            _front(approval=bad)
+    for good in hdr.APPROVALS:
+        assert _front(approval=good)[0]._approval == good
 
 
 # ── 크기와 실패 ──────────────────────────────────────────────────────────────
