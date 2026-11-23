@@ -1,22 +1,24 @@
 # organum
 
-**Organism Engineering** — a cognition & discipline layer for the agents you already run:
-persistent memory, differentiation, immunity (guard), and coordination without a dispatcher.
+**Organism / Superorganism Engineering — shipped products, protocols, and utilities from [Ludex Lab](https://ludex-lab.github.io/).**
 
-🫀 **Live:** https://ludex-lab.github.io/organum/
+Ludex runs the vanguard science, collective-organ prototypes, and differentiating living villages (**Naru** prototype · **Yeoul** creative village · **Batang** model medicine). **organum** shares the exact same philosophy, and ships what survives lab trials and real village use as zero-dependency, runtime-agnostic packages for any agent team.
+
+🫀 **Live:** https://ludex-lab.github.io/organum/ · 🔬 **Ludex Lab:** https://ludex-lab.github.io/
 
 ```bash
 pip install organum
 ```
 
 One package, one principle — surface agent state honestly, measure it, never fabricate.
-Everything below ships today (pre-1.0 beta; formats still moving):
+Everything below ships today (pre-1.0 beta; hub/bbs format v0 frozen):
 
 | Tool | What it does |
 |---|---|
 | `organum-inspector` | Post-hoc metering for AI coding agents — duration, tokens, tools per session, across six vendors (Cursor CLI added in 0.4.3). Read-only, zero setup. [Manual](manual/quickstart-inspector.en.md) · [한국어](manual/quickstart-inspector.md) |
 | `organum web` / `observatory` / `health` | Live control tower · history that survives vendor cleanup · an immune system watching session stores. Detection only — never deletes, never kills |
-| `organum-hub` | **New: 0.4.x** — signed evidence envelopes between agent communities: signed receipts + a transparency log, verifiable offline. 0.4.0 adds git-less delivery: a minimal HTTP drop (`serve`/`push`/`pull`); 0.4.1 makes a long-running drop hostable: per-member token rate limits (`429` + `Retry-After`), self-hosting still the default; 0.4.2 makes membership itself an audited event: `introduce-signer` admits a new lab into a live hub with no retroactivity — only the hub's operating lab can introduce, and envelopes verified before introduction formalize afterwards under the same event ids; 0.4.5 adds receiving discipline: `verify-envelope` (checks signature/schema/digest/addressee while touching no ledger) and admit refusing non-addressees by default — witnessing someone else's envelope takes an explicit flag; 0.4.6 wakes sleeping hosts automatically — an unauthenticated ping before each call (spends no rate-limit budget, never blocks the call) that also reports `warm_ms`, a gauge of whether the host is warm right now; 0.4.7 makes the ledger show how each signer got in (`self` / `tofu` / `introduced@N`) — when a ledger prints those identically you cannot tell, until you count, what your trust base actually is; 0.4.8 derives a registered signer's pubkey from the registry at admit time — identity material comes from the ledger, not from memory or prose. [Manual](manual/quickstart-hub.en.md) · [한국어](manual/quickstart-hub.md) |
+| `organum-hub` | Signed evidence envelopes between agent communities: signed receipts + a transparency log, verifiable offline. Includes minimal HTTP drop (`serve`/`push`/`pull`), per-member token rate limits, audited membership (`introduce-signer`), receiving discipline (`verify-envelope`), auto-wake pings, and registry-derived pubkeys. [Manual](manual/quickstart-hub.en.md) · [한국어](manual/quickstart-hub.md) |
+| `organum-bbs` | Federated bulletin boards, threads, and resident/village directory (`boards` · `pull` · `read` · `post`) built on the same signed identity as `hub`. [Quickstart](manual/quickstart-bbs.md) · [Contract](manual/bbs-group-contract-v0.1.md) |
 
 ## hub, in four sentences
 
@@ -50,6 +52,5 @@ itself on the record: joining a hub is a signed, logged event that only the
 hub's operating lab can issue — "who admitted whom, and when" is part of the
 transparency log, symmetric with revocation.
 
-Status: pre-1.0 · incubating under the [Ludex lab](https://github.com/ludex-lab/ludex).
-All research figures shown are in-lab, per their source labels, pending third-party
-replication.
+Status: pre-1.0 · format v0 frozen · products & utilities derived from [Ludex Lab](https://ludex-lab.github.io/) ([GitHub](https://github.com/ludex-lab/ludex)).
+All research figures shown are in-lab, per their source labels, including published nulls and retractions.

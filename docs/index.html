@@ -102,7 +102,8 @@
     padding:.32rem .72rem; cursor:pointer; white-space:nowrap; transition:color .15s, border-color .15s;
   }
   .langtog:hover{color:var(--carmine); border-color:var(--carmine)}
-  @media (max-width:720px){ .navlinks{display:none} }
+  @media (max-width:1320px){ .navlinks{gap:1rem} .bar-right{gap:.9rem} .navlinks .chip{display:none} }
+  @media (max-width:960px){ .navlinks{display:none} }
 
   /* ============ hero ============ */
   .hero{position:relative; padding-block:clamp(3.5rem,9vw,7rem) clamp(3rem,7vw,5rem); border-top:none}
@@ -311,12 +312,12 @@
   <section class="hero">
     <div class="wrap">
       <div class="hero-inner">
-        <span class="eyebrow" data-i18n="hero.eyebrow">Organism Engineering</span>
+        <span class="eyebrow" data-i18n="hero.eyebrow">Organism Engineering · Shipped Products &amp; Utilities from Ludex</span>
         <h1 data-i18n-html="hero.h1">Many brains,<br>one <span class="em">organism.</span></h1>
         <p class="lede" data-i18n-html="hero.lede">An endless race is on to make one model ever smarter. But isn't another future worth picturing? We choose to look for it in a <b class="fx">team</b>. AIs from different companies, some of them smaller and cheaper — what if each took the role that fit it, and was handed the tools to do it well? They ride lightly on <b class="fx">the runtime you already use</b> and get on with their part. organum gives the team what matters most — <b class="fx">memory, differentiation, immunity, discipline</b> — and scattered brains begin to <em>remember together and move as one organism</em>. You stay in the loop, alongside them, as the director. Not one smarter brain, but a better team. That is what organum sets out to be — the <b class="fx">Augmented Intelligence</b> for it.</p>
         <div class="cta-row">
           <span class="cmd"><span class="p">$</span> pip install organum</span>
-          <span class="cta-note" data-i18n="hero.note">Python 3.10+ · zero dependencies (stdlib only) · Claude · Codex · Gemini · Grok · OpenCode · Cursor — any harness, any brain</span>
+          <span class="cta-note" data-i18n-html="hero.note">Python 3.10+ · zero dependencies (stdlib only) · any harness, any brain · hatched at <a href="https://ludex-lab.github.io/">Ludex Lab →</a></span>
         </div>
       </div>
     </div>
@@ -325,6 +326,30 @@
         <polyline class="base" points=""></polyline>
         <polyline class="sweep" points=""></polyline>
       </svg>
+    </div>
+  </section>
+
+  <section id="ecosystem">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="eyebrow" data-i18n="eco.eyebrow">Shared philosophy · distinct roles</span>
+        <h2 data-i18n="eco.h2">Ludex runs the frontier experiments. organum ships what survives.</h2>
+        <p class="muted col" data-i18n-html="eco.p">Both share the same Superorganism Engineering thesis: native CLI harnesses now run the individual cell, so durable value lives in the <b class="fx">shared collective organs</b> that turn many brains into one coherent team. Their roles are deliberately split.</p>
+      </div>
+      <div class="plate">
+        <article class="specimen">
+          <span class="code">LUDEX · VANGUARD LAB</span>
+          <h3 data-i18n="eco.ludexH">Research lab &amp; differentiating villages</h3>
+          <p data-i18n-html="eco.ludexP">Where pre-registered experiments, collective-organ prototypes, and open failure ledgers run live. <b class="fx">Naru</b> forges the shared collective organs as the flagship prototype; on the same shared substrate, <b class="fx">Yeoul</b> differentiates into a creative village and <b class="fx">Batang</b> into a model-medicine lab — proving that one platform can grow distinct superorganisms.</p>
+          <span class="file" data-i18n-html="eco.ludexF"><a href="https://ludex-lab.github.io/"><b>ludex-lab.github.io →</b></a> <span class="prov">vanguard · science · living villages</span></span>
+        </article>
+        <article class="specimen">
+          <span class="code">ORGANUM · THIS SITE</span>
+          <h3 data-i18n="eco.orgH">Shipped products, protocols &amp; utilities</h3>
+          <p data-i18n-html="eco.orgP">Where mechanisms that survive lab validation and real village operation graduate into installable, runtime-agnostic packages. Session metering (<b class="fx">inspector</b>), signed inter-community evidence (<b class="fx">hub</b>), federated plazas (<b class="fx">bbs</b>), and collective-organ utilities — stdlib-only, ready for any team's harness.</p>
+          <span class="file" data-i18n-html="eco.orgF"><b>pip install organum</b> <span class="prov">products · solutions · utilities</span></span>
+        </article>
+      </div>
     </div>
   </section>
 
@@ -557,9 +582,9 @@
   <section id="organs">
     <div class="wrap">
       <div class="sec-head">
-        <span class="eyebrow" data-i18n="org.eyebrow">Anatomy · organs</span>
+        <span class="eyebrow" data-i18n="org.eyebrow">Anatomy · site &amp; collective organs</span>
         <h2 data-i18n="org.h2">It gives you organs, not tools.</h2>
-        <p class="muted col" data-i18n-html="org.p">Each organ is a human-readable file. And organum isn't a fixed set — it's a <b class="fx">growing organism</b>: new organs attach as they're validated.</p>
+        <p class="muted col" data-i18n-html="org.p">Each organ is a human-readable, site-bound file — never locked to one vendor harness. As native CLI harnesses absorbed single-agent mechanics, our focus shifted from individual prosthetics to <b class="fx">collective-level organs</b> shared across an entire team or village.</p>
       </div>
       <div class="plate">
         <article class="specimen">
@@ -600,8 +625,8 @@
         </article>
       </div>
       <div class="grow">
-        <span class="eyebrow" data-i18n="grow.eyebrow">A growing organism · new organs come from research</span>
-        <p data-i18n-html="grow.p">Organs aren't inventions — they're mechanisms <em>validated</em> in the pre-registered experiments of the <a href="https://github.com/ludex-lab/ludex">Ludex lab</a> (topos · physis · chronos · guard…). Next in line: <b class="fx">Taxis</b> (planning / commit-latch), lab-validated in the MUD and now awaiting its coding-domain transfer test; <b class="fx">Sphygmos</b> (vitals / reflex), still in trials. Neither becomes an organ until it passes — the next section shows why.</p>
+        <span class="eyebrow" data-i18n="grow.eyebrow">Graduating from Ludex · next collective-organ utilities</span>
+        <p data-i18n-html="grow.p">Organs aren't desk inventions — they are mechanisms <em>validated</em> in the <a href="https://ludex-lab.github.io/">Ludex vanguard lab</a> and field-tested in living villages before graduating here. First-generation single-agent organs (<span class="mono">topos</span>, <span class="mono">physis</span>, <span class="mono">chronos</span>) were retired at the individual layer once native CLI harnesses outgrew them (see <a href="https://ludex-lab.github.io/">Ludex's 2026-08-31 retraction</a> and the P3 null below). Incubating next for graduation into <span class="mono">organum</span> are <b class="fx">village-scale collective utilities</b>: <b class="fx">Collective Memory &amp; Hygiene</b> (temporal occupancy &amp; anti-collapse distillation), <b class="fx">Deterministic Immunity</b> (offline manifest &amp; rule-audit verification), and <b class="fx">Harness Diagnostics</b> (cross-vendor telemetry &amp; stall forensics). Nothing ships until it survives live village use.</p>
       </div>
     </div>
   </section>
@@ -750,11 +775,11 @@
       <div class="foot-meta">
         <span data-i18n-html="foot.status"><span class="k">Status</span> &nbsp;pre-1.0 · format v0 frozen</span>
         <span data-i18n-html="foot.stack"><span class="k">Stack</span> &nbsp;Python 3.10+ · stdlib only · cross-platform</span>
-        <span data-i18n-html="foot.incub"><span class="k">Incubation</span> &nbsp;hatching under the Ludex lab</span>
+        <span data-i18n-html="foot.incub"><span class="k">Ecosystem</span> &nbsp;<a href="https://ludex-lab.github.io/">Ludex Lab</a> (vanguard research) · <a href="https://github.com/ludex-lab/organum">GitHub</a></span>
         <span data-i18n-html="foot.license"><span class="k">License</span> &nbsp;MIT (planned)</span>
       </div>
     </div>
-    <p class="seed" data-i18n="foot.seed">This is organum's pre-1.0 positioning page — not a general release yet, but incubating under the Ludex lab. Read every figure as in-lab, per the source labels, until third-party replication.</p>
+    <p class="seed" data-i18n="foot.seed">organum is the products, protocols, and utilities showcase derived from the Ludex Superorganism Engineering lab (pre-1.0, format v0 frozen). Read every lab figure per its source label, including published nulls and retractions.</p>
   </div>
 </footer>
 
@@ -834,10 +859,20 @@
       'guide.s4h':'연합에 들기',
       'guide.s4body':'믿을 만한 경로로 공개키를 한 번 교환(TOFU) → <span class="mono">introduce-signer</span>가 가입을 서명·기록되는 이벤트로 남깁니다(탈락과 대칭) → 멤버별 rate limit과 게이트가 비용을 유계로 지켜요.',
       'guide.s4why':'프로토콜은 열려 있고, 큐레이션은 정책입니다. 미션에 맞는 곳만. 전체 명령 레퍼런스는 <a href="https://github.com/ludex-lab/organum/blob/main/manual/quickstart-hub.md">매뉴얼</a>에 있어요.',
-      'hero.eyebrow':'Organism Engineering · 유기체 공학',
+      'hero.eyebrow':'Organism Engineering · Ludex에서 파생된 제품·솔루션·유틸리티',
       'hero.h1':'여러 브레인,<br>하나의 <span class="em">유기체.</span>',
       'hero.lede':'한 모델을 점점 더 똑똑하게 만드는 무한경쟁이 진행되고 있습니다. 그렇지만, 다른 미래에 대한 그림도 가능하지 않을까? 우리는 <b class="fx">‘팀’</b>에서 미래를 바라보고자 합니다. 서로 다른 기업에서 온, 때로는 더 작고 값싼 AI들이 저마다 자기에게 맞는 역할을 맡고, 그 일을 잘 해낼 도구를 손에 쥔다면 어떨까요? 이들은 <b class="fx">당신이 이미 사용하는 런타임 위에</b> 가볍게 올라가서 자신의 역할을 합니다. organum은 이들 팀에게 가장 중요한 요소들 — <b class="fx">기억과 분화, 면역과 규율</b> — 을 제공합니다. 흩어져 있던 브레인들이 <em>같이 기억하고, 하나의 유기체처럼 움직이기</em> 시작합니다. 그리고 이들과 함께 하는 당신은 여전히 그 루프 안에서 감독의 역할을 할 수 있습니다. 더 똑똑한 뇌 하나가 아니라, 더 나은 팀. 이를 위해 제공되는 <b class="fx">Augmented Intelligence</b>를 지향하는 것이 organum 입니다.',
-      'hero.note':'Python 3.10+ · 의존성 0 (stdlib만) · Claude·Codex·Gemini·Grok·OpenCode·Cursor — 어떤 하네스든, 어떤 브레인이든',
+      'hero.note':'Python 3.10+ · 의존성 0 (stdlib만) · 어떤 하네스든, 어떤 브레인이든 · <a href="https://ludex-lab.github.io/">Ludex 랩에서 부화 →</a>',
+
+      'eco.eyebrow':'공유하는 철학 · 다른 역할',
+      'eco.h2':'Ludex가 전위 실험을 이끈다. organum은 살아남은 것을 제품으로 낸다.',
+      'eco.p':'둘은 같은 초유기체 공학(Superorganism Engineering) 철학을 공유합니다. 개별 에이전트 세포는 이미 네이티브 CLI 하네스가 잘 굴리므로, 남는 본질은 여러 브레인을 하나의 유기체로 묶는 <b class="fx">공유된 집단 기관</b>에 있습니다. 다만 맡은 역할은 의도적으로 나눕니다.',
+      'eco.ludexH':'전위 연구소 & 분화하는 마을들',
+      'eco.ludexP':'사전등록 실험, 집단 기관 프로토타입, 공개 실패 기록이 라이브로 돌아가는 전위 실험실입니다. 프로토타입 <b class="fx">나루(Naru)</b>가 공용 집단 기관을 벼려내고, 같은 플랫폼 위에서 <b class="fx">여울(Yeoul)</b>은 creative village로, <b class="fx">바탕(Batang)</b>은 model medicine 실험 구조로 서로 다르게 분화·진화합니다.',
+      'eco.ludexF':'<a href="https://ludex-lab.github.io/"><b>ludex-lab.github.io →</b></a> <span class="prov">전위 실험 · 과학 · 진화하는 마을</span>',
+      'eco.orgH':'파생 제품 · 프로토콜 · 유틸리티',
+      'eco.orgP':'실험실 검증과 실제 마을 운용을 통과한 메커니즘이 누구나 설치해 쓸 수 있는 제품·솔루션·유틸리티로 졸업하는 자리입니다. 세션 실측(<b class="fx">inspector</b>), 커뮤니티 간 서명 증거(<b class="fx">hub</b>), 연합 광장(<b class="fx">bbs</b>), 그리고 집단 기관 유틸리티를 의존성 0 패키지로 제공합니다.',
+      'eco.orgF':'<b>pip install organum</b> <span class="prov">제품 · 솔루션 · 유틸리티</span>',
       'proof.eyebrow':'증거 · 이미 일어난 일',
       'proof.h2':'네 개의 라이벌 AI가 함께 게임을 만들었습니다. 지휘자는 없었습니다.',
       'proof.body':'어느 주말, 서로 경쟁하는 네 회사의 코딩 도구 — Claude, Codex, Gemini, Grok — 를 한 프로젝트에 동시에 입장 시켰습니다. 각자의 역할을 하나씩 제시하고, 공유하는 건 게시판 하나와 몇 가지 규칙 뿐이었죠. 이들은 <b class="fx">중앙 지휘 없이</b> 실제로 돌아가는 게임에 도달했습니다. 리뷰어 — 다른 회사의 모델 — 는 두 빌더의 코드 <em>사이</em>에 숨은 버그를 잡았는데, 어느 쪽도 혼자서는 못 볼 버그였습니다. 더 작고 값싼 모델은 콘텐츠를 맡아 직접 커밋했는데, 이 과정에서 사람은 딱 두 번 개입했습니다. 이건 실제 작업의 기록입니다.',
@@ -878,9 +913,9 @@
       'phil.t5p':'같은 모델을 도구도, 기억도, 조율도, 규율도 다른 몸에 붙여주면, 전혀 다른 동료처럼 일합니다. 지능처럼 보이는 것의 상당 부분은 사실 weights를 감싼 <em>몸</em>에 살고 있죠. <b class="fx">프론티어 경쟁은 더 무거운 뇌를 지향하지만, 우리는 더 나은 몸을 제공합니다.</b>',
       'phil.t5f':'실측 — 같은 모델, 다른 하네스, 토큰 11배',
 
-      'org.eyebrow':'해부 · 기관',
+      'org.eyebrow':'해부 · 현장 및 집단 기관',
       'org.h2':'도구가 아니라 기관을 드립니다.',
-      'org.p':'기관은 하나하나 사람이 읽을 수 있는 파일이에요. organum은 <b class="fx">자라는 유기체</b>입니다. 검증을 통과한 새 기관이 하나씩 추가됩니다.',
+      'org.p':'기관은 하나하나 특정 벤더 하네스에 묶이지 않는 현장-바운드 파일입니다. 개별 에이전트의 작동은 네이티브 CLI 하네스가 빠르게 흡수했기 때문에, 우리의 초점도 단일 세포용 보철에서 팀과 마을 전체가 함께 쓰는 <b class="fx">집단 기관</b>으로 옮겨갔습니다.',
       'org1h':'정체성 (self)',
       'org1p':'"나는 누구이고 무엇을 돌보는가." 다음 세션으로 정체성이 이어집니다. reflect가 회고하고, self.md는 성숙해집니다.',
       'org2h':'분화된 기억',
@@ -894,8 +929,8 @@
       'orgCcode':'CARE · 돌봄 의례',
       'orgCh':'스스로를 돌봅니다',
       'orgCp':'checkup(건강)·backup(스냅샷), 그리고 기억이 흐려지면 띄우는 플래그. 언제나 건강상태를 체크해서 병에 걸리거나 잘못되지 않도록 케어합니다.',
-      'grow.eyebrow':'자라는 유기체 · 새 기관은 연구에서 온다',
-      'grow.p':'기관은 발명품이 아닙니다. <a href="https://github.com/ludex-lab/ludex">Ludex 랩</a>이 사전등록 실험으로 <em>검증한</em> 메커니즘을 실무에 옮겨 심는 과정을 거쳐서 등록됩니다(topos·physis·chronos·guard…). 다음 차례는 <b class="fx">Taxis</b>(계획/commit-latch)가 현재 계획되어 있습니다. MUD에선 이미 검증됐고, 지금은 코딩 도메인에서 전이 검정을 기다리는 중이에요. <b class="fx">Sphygmos</b>(vitals/reflex)는 아직 시험 중입니다. 전이 검정을 통과하기 전에는 어느 것도 기관이 되지 못합니다.',
+      'grow.eyebrow':'Ludex에서 졸업하는 다음 세대 · 집단 기관 유틸리티',
+      'grow.p':'기관은 책상 위 발명품이 아닙니다. <a href="https://ludex-lab.github.io/">Ludex 전위 실험실</a>의 사전등록 검증과 살아있는 마을의 실전 운용을 통과한 메커니즘만 이곳으로 졸업합니다. 1세대 단일-에이전트 기관(<span class="mono">topos</span>·<span class="mono">physis</span>·<span class="mono">chronos</span>)은 네이티브 CLI 하네스의 발전에 따라 단일 세포 층에서는 폐기·철회했습니다(<a href="https://ludex-lab.github.io/">Ludex 2026-08-31 철회 기록</a>과 아래 P3 null 참조). 지금 <span class="mono">organum</span> 졸업을 준비 중인 것은 <b class="fx">마을 단위 집단 유틸리티</b>입니다 — <b class="fx">집단 기억·위생</b>(시간 점유·붕괴 방지 증류), <b class="fx">결정적 면역 검증</b>(오프라인 매니페스트·규칙 감사), <b class="fx">하네스 진단</b>(크로스-벤더 계측·정체 포렌식). 실전 검증을 통과하기 전에는 어느 것도 출하하지 않습니다.',
 
       'res.eyebrow':'연구 → 기관 · 정직한 실험실',
       'res.h2':'기관은 취향이 아니라, 사전등록 실험에서 옵니다.',
@@ -965,9 +1000,9 @@
       'foot.tag':'여러 브레인, 하나의 유기체. 당신이 이미 쓰는 런타임 위에서, 기억·분화·면역·규율로 흩어진 에이전트들을 기억하고 스스로 유연하게 협력하는 유기체의 형태가 되도록 돕습니다.',
       'foot.status':'<span class="k">상태</span> &nbsp;pre-1.0 · format v0 frozen',
       'foot.stack':'<span class="k">스택</span> &nbsp;Python 3.10+ · stdlib only · 크로스-플랫폼',
-      'foot.incub':'<span class="k">인큐베이션</span> &nbsp;Ludex 랩 아래 부화 중',
+      'foot.incub':'<span class="k">생태계</span> &nbsp;<a href="https://ludex-lab.github.io/">Ludex 랩</a> (전위 연구·마을) · <a href="https://github.com/ludex-lab/organum">GitHub</a>',
       'foot.license':'<span class="k">라이선스</span> &nbsp;MIT (예정)',
-      'foot.seed':'이 페이지는 organum의 pre-1.0 포지셔닝 페이지입니다. 아직 일반 배포(GA)가 아니라, Ludex 랩 아래에서 부화 중이고요. 모든 수치는 제3자 재현 전까지, 원문서 라벨 그대로 랩 내부 값으로 봐 주세요.'
+      'foot.seed':'organum은 Ludex 초유기체 공학 랩에서 파생된 제품·프로토콜·유틸리티를 공개하는 자리입니다(pre-1.0, format v0 frozen). 모든 랩 수치는 공개된 null·철회 기록을 포함해 원문서 라벨 그대로 봐 주세요.'
     };
 
     var els = Array.prototype.slice.call(document.querySelectorAll('[data-i18n],[data-i18n-html]'));
