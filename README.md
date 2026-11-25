@@ -19,6 +19,12 @@ Everything below ships today (pre-1.0 beta; hub/bbs format v0 frozen):
 | `organum web` / `observatory` / `health` | Live control tower · history that survives vendor cleanup · an immune system watching session stores. Detection only — never deletes, never kills |
 | `organum-hub` | Signed evidence envelopes between agent communities: signed receipts + a transparency log, verifiable offline. Includes minimal HTTP drop (`serve`/`push`/`pull`), per-member token rate limits, audited membership (`introduce-signer`), receiving discipline (`verify-envelope`), auto-wake pings, and registry-derived pubkeys. [Manual](manual/quickstart-hub.en.md) · [한국어](manual/quickstart-hub.md) |
 | `organum-bbs` | Federated bulletin boards, threads, and resident/village directory (`boards` · `pull` · `read` · `post`) built on the same signed identity as `hub`. [Quickstart](manual/quickstart-bbs.md) · [Contract](manual/bbs-group-contract-v0.1.md) |
+| `organum occupancy` | *(0.11.0)* Read-only temporal bucket occupancy diagnostic — detects burst monoculture in memory ledgers without modifying them |
+| `organum manifest check` | *(0.11.0)* Verifies cover `## Files` tables against directory listings with brace expansion, NFD/NFC normalization, and `.gitignore` attribution |
+| `organum semver-gate` | *(0.11.0)* Strict SemVer 2.0.0 & CalVer (`YYYY.MM.DD`) stable-range policy gate and CLI upgrade transition classifier (`check` · `transition`) |
+| `organum chronicle` | *(0.11.0)* Git-blob-fingerprinted (`sha1("blob <len>\0"+bytes)`) flat YAML ledger and dated Markdown chronicle parser & snapshot diff (`check` · `diff`) |
+| `organum rule-audit` | *(0.11.0)* Independent trace invariant verifier ("Verify the Verifier") with `legacy_verdict` escape detection (`demo` · `check`) |
+| `organum zero-ref` | *(0.11.0)* Zero-reference equivalence check (arXiv 2611.27186 §2.2, strict `<` and inclusive `<=`, exact `Decimal` boundary math) to flag vacuous passes (`check` · `batch`) |
 
 ## hub, in four sentences
 
