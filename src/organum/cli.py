@@ -1264,6 +1264,313 @@ def cmd_join(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_occupancy(args: argparse.Namespace) -> int:
+    """기억 원장의 시간 버킷 점유 진단 (read-only; 원장을 수정하지 않는다)."""
+    from organum import occupancy as occ
+
+    if args.file:
+        src_path = Path(args.file)
+    else:
+        src_path = _require_state() / "memory" / "memories.jsonl"
+    if not src_path.is_file():
+        print(f"organum: occupancy 대상 파일을 찾을 수 없습니다: {src_path}", file=sys.stderr)
+        return 1
+    try:
+        report = occ.inspect_jsonl_occupancy(
+            src_path,
+            capacity=args.capacity,
+            bucket_seconds=args.bucket_hours * 3600.0,
+            bucket_cap=args.bucket_cap,
+        )
+    except occ.OccupancyError as exc:
+        print(f"organum: occupancy 오류 — {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+
+    print("── temporal occupancy (read-only) ──")
+    print(f"  source: {report['source']}")
+    print(f"  items:  {report['total_items']} (skipped {report['skipped_rows']})")
+    print(
+        f"  raw:    {report['raw_distinct_buckets']} buckets, "
+        f"max {report['raw_max_bucket_count']} (top share {report['raw_top_bucket_share']:.1%})"
+    )
+    print(
+        f"  capped: kept {report['kept_count']}/{report['capacity']} across "
+        f"{report['distinct_buckets']} buckets (max {report['max_bucket_occupancy']}, cap {report['bucket_cap']})"
+    )
+    print(
+        f"  evict:  bucket_cap={report['evicted_bucket_cap']}, "
+        f"global_cap={report['evicted_global_cap']}"
+    )
+    return 0
+
+
+def cmd_manifest(args: argparse.Namespace) -> int:
+    """기록 폴더 커버(## Files) 매니페스트 존재 검증 (read-only)."""
+    from organum import manifest as mf
+
+    if args.manifest_cmd != "check":
+        print(f"organum: 알 수 없는 manifest 하위 명령: {args.manifest_cmd}", file=sys.stderr)
+        return 1
+
+    gi_path = Path(args.gitignore) if args.gitignore else None
+    try:
+        report = mf.check_record_dir(
+            Path(args.directory),
+            cover_name=args.cover,
+            gitignore_path=gi_path,
+            receipt_name=args.receipt_name,
+        )
+    except mf.ManifestError as exc:
+        if args.json:
+            print(json.dumps({
+                "schema": mf.SCHEMA,
+                "verdict": "ERROR",
+                "passed": False,
+                "code": exc.code,
+                "error": str(exc),
+            }, ensure_ascii=False, indent=2))
+        else:
+            print(f"organum: manifest 오류 [{exc.code}] — {exc}", file=sys.stderr)
+        return 1
+
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report["passed"] else 1
+
+    print(f"── record manifest: {report['verdict']} ({report['directory']}) ──")
+    print(
+        f"  cover: {report['cover']} · named={report['named_count']}, "
+        f"listed={report['listed_count']}, missing={report['missing_count']}"
+    )
+    for finding in report["findings"]:
+        if finding["level"] == "FAIL":
+            print(f"  [FAIL] {finding['code']}: {finding['name']} — {finding['detail']}")
+    info_items = [f for f in report["findings"] if f["level"] != "FAIL"]
+    for finding in info_items[:10]:
+        print(f"  [INFO] {finding['code']}: {finding['name']} — {finding['detail']}")
+    if len(info_items) > 10:
+        print(f"  … (+{len(info_items) - 10} more INFO)")
+    return 0 if report["passed"] else 1
+
+
+def cmd_semver_gate(args: argparse.Namespace) -> int:
+    """SemVer 2.0.0 / CalVer 제약 및 CLI 업그레이드 전이 판정 (read-only)."""
+    from organum import semver_gate as sg
+
+    if args.sg_cmd == "check":
+        dec = sg.evaluate_constraint(
+            args.version,
+            args.spec,
+            allow_prerelease=args.allow_prerelease,
+            scheme=args.scheme,
+        )
+        if args.json:
+            print(json.dumps(dec.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            tag = "PASS" if dec.ok else "FAIL"
+            print(f"[{tag}] {dec.reason_code}: {dec.detail}")
+        return 0 if dec.ok else 1
+
+    if args.sg_cmd == "transition":
+        tr = sg.classify_upgrade_transition(
+            args.before,
+            args.after,
+            floor=args.floor,
+            extract_token=not args.no_extract,
+            scheme=args.scheme,
+            tool=args.tool,
+        )
+        if args.json:
+            print(json.dumps(tr.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            tag = "ALERT" if tr.alert else "OK"
+            print(f"[{tag}] {tr.status}: {tr.detail}")
+        return 1 if tr.alert else 0
+
+    print(f"organum: 알 수 없는 semver-gate 하위 명령: {args.sg_cmd}", file=sys.stderr)
+    return 1
+
+
+def cmd_chronicle(args: argparse.Namespace) -> int:
+    """Git blob 지문 기반 YAML 원장 / 마크다운 연대기 검증 및 diff (read-only)."""
+    from organum import chronicle as ch
+
+    try:
+        if args.ch_cmd == "check":
+            snap = ch.load_snapshot_file(
+                Path(args.file),
+                fmt=args.format,
+                root_key=args.root_key,
+            )
+            if args.json:
+                print(json.dumps(snap.to_dict(), ensure_ascii=False, indent=2))
+            else:
+                print(
+                    f"[PASS] {snap.source_path} · entries={len(snap.entries)} · "
+                    f"blob={snap.blob_fingerprint[:12]}"
+                )
+            return 0
+
+        if args.ch_cmd == "diff":
+            if args.git_repo:
+                if not args.rel_path:
+                    print("organum: --git-repo 사용 시 --rel-path가 필요합니다.", file=sys.stderr)
+                    return 1
+                repo = Path(args.git_repo)
+                b_txt, b_blob = ch.read_git_blob_text(repo, args.before, args.rel_path)
+                a_txt, a_blob = ch.read_git_blob_text(repo, args.after, args.rel_path)
+                b_snap = ch.parse_snapshot_auto(
+                    b_txt,
+                    source_path=args.rel_path,
+                    fmt=args.format,
+                    root_key=args.root_key,
+                    blob_fingerprint=b_blob,
+                    label=args.before,
+                    git_rev=args.before,
+                )
+                a_snap = ch.parse_snapshot_auto(
+                    a_txt,
+                    source_path=args.rel_path,
+                    fmt=args.format,
+                    root_key=args.root_key,
+                    blob_fingerprint=a_blob,
+                    label=args.after,
+                    git_rev=args.after,
+                )
+            else:
+                b_snap = ch.load_snapshot_file(Path(args.before), fmt=args.format, root_key=args.root_key)
+                a_snap = ch.load_snapshot_file(Path(args.after), fmt=args.format, root_key=args.root_key)
+            diff = ch.diff_snapshots(b_snap, a_snap)
+            if args.json:
+                print(json.dumps(diff.to_dict(), ensure_ascii=False, indent=2))
+            else:
+                print(ch.render_diff_markdown(diff), end="")
+            return 0
+    except (ch.ChronicleParseError, FileNotFoundError, ValueError) as exc:
+        if args.json:
+            print(json.dumps({
+                "schema": ch.SCHEMA,
+                "verdict": "ERROR",
+                "error": str(exc),
+            }, ensure_ascii=False, indent=2))
+        else:
+            print(f"organum: chronicle 오류 — {exc}", file=sys.stderr)
+        return 1
+
+    print(f"organum: 알 수 없는 chronicle 하위 명령: {args.ch_cmd}", file=sys.stderr)
+    return 1
+
+
+def cmd_rule_audit(args: argparse.Namespace) -> int:
+    """독립 불변조건 규칙 감사 (Verify the Verifier, read-only)."""
+    from organum import rule_audit as ra
+
+    if args.ra_cmd == "demo":
+        cases = ra.build_queue_self_demo_cases()
+        res = ra.evaluate_cases(cases, ra.QUEUE_RULES, pack="queue")
+        if args.json:
+            print(json.dumps(res, ensure_ascii=False, indent=2))
+        else:
+            s = res["summary"]
+            print(
+                f"── rule-audit demo (pack=queue) ──\n"
+                f"  total={s['total']} · escapes_caught={s['escapes_caught']} · "
+                f"true_passes={s['true_passes']} · true_fails={s['true_fails']} · "
+                f"false_alarms={s['false_alarms']} · missed_faults={s['missed_faults']}"
+            )
+        return 0 if (res["summary"]["false_alarms"] == 0 and res["summary"]["missed_faults"] == 0) else 1
+
+    if args.ra_cmd == "check":
+        pack_rules = ra.PACKS.get(args.pack)
+        if pack_rules is None:
+            print(f"organum: 알 수 없는 rule-audit 팩: {args.pack!r} (가능: {', '.join(sorted(ra.PACKS))})", file=sys.stderr)
+            return 1
+        trace_path = Path(args.trace_file)
+        if not trace_path.is_file():
+            print(f"organum: trace 파일을 찾을 수 없습니다: {trace_path}", file=sys.stderr)
+            return 1
+        try:
+            trace = json.loads(trace_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"organum: trace JSON 파싱 오류 — {exc}", file=sys.stderr)
+            return 1
+        if not isinstance(trace, dict):
+            print("organum: trace 최상위 JSON은 객체(dict)여야 합니다.", file=sys.stderr)
+            return 1
+        rep = ra.audit_trace(trace, pack_rules, pack=args.pack, legacy_verdict=args.legacy_verdict)
+        if args.json:
+            print(json.dumps(rep.to_dict(), ensure_ascii=False, indent=2))
+        else:
+            tag = "PASS" if rep.passed else "FAIL"
+            esc = " [ESCAPE DETECTED]" if rep.escape_detected else ""
+            print(f"[{tag}]{esc} pack={rep.pack} · rules={len(rep.rules_checked)} · violations={len(rep.violations)}")
+            for v in rep.violations:
+                print(f"  - [{v.rule_id}] {v.message}")
+        return 0 if rep.passed else 1
+
+    print(f"organum: 알 수 없는 rule-audit 하위 명령: {args.ra_cmd}", file=sys.stderr)
+    return 1
+
+
+def cmd_zero_ref(args: argparse.Namespace) -> int:
+    """영점 기준(zero-reference) 일치 판정 검사 (arXiv 2611.27186 §2.2, read-only)."""
+    from organum import zero_ref as zr
+
+    strict = not args.inclusive
+    try:
+        if args.zr_cmd == "check":
+            res = zr.evaluate_zero_ref(
+                args.lo,
+                args.hi,
+                args.candidate,
+                args.margin,
+                strict=strict,
+                item_id=args.item_id,
+            )
+            if args.json:
+                print(json.dumps(res.to_dict(), ensure_ascii=False, indent=2))
+            else:
+                mode_label = "strict(<)" if strict else "inclusive(<=)"
+                bnd = " [boundary: T==m]" if res.zero_at_boundary else ""
+                print(
+                    f"[{res.classification}] ({mode_label}) "
+                    f"cand={'PASS' if res.candidate_pass else 'FAIL'} · "
+                    f"zero={'PASS' if res.zero_pass else 'FAIL'} · "
+                    f"T={res.t_zero} vs m={res.margin}{bnd}"
+                )
+            return 0 if res.informative else 1
+
+        if args.zr_cmd == "batch":
+            records = zr.load_zero_ref_records(Path(args.file))
+            rep = zr.evaluate_zero_ref_batch(records, strict=strict)
+            if args.json:
+                print(json.dumps(rep, ensure_ascii=False, indent=2))
+            else:
+                s = rep["summary"]
+                print(
+                    f"── zero-ref batch ({rep['mode']}) ──\n"
+                    f"  total={s['total']} · informative_match={s['informative_match']} · "
+                    f"uninformative_pass={s['uninformative_pass']} · "
+                    f"worse_than_zero={s['worse_than_zero']} · mismatch={s['mismatch']} · "
+                    f"boundary={s['zero_at_boundary']}"
+                )
+            s = rep["summary"]
+            return 0 if (s["uninformative_pass"] == 0 and s["worse_than_zero"] == 0 and s["mismatch"] == 0) else 1
+    except (zr.ZeroRefError, FileNotFoundError, json.JSONDecodeError) as exc:
+        if args.json:
+            print(json.dumps({"schema": zr.SCHEMA, "verdict": "ERROR", "error": str(exc)}, ensure_ascii=False, indent=2))
+        else:
+            print(f"organum: zero-ref 오류 — {exc}", file=sys.stderr)
+        return 1
+
+    print(f"organum: 알 수 없는 zero-ref 하위 명령: {args.zr_cmd}", file=sys.stderr)
+    return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="organum",
@@ -1621,6 +1928,86 @@ def build_parser() -> argparse.ArgumentParser:
                         help="기계용 JSON {cell, role, started, charter, goal:[...], inbox:[...], alarms:[...]} "
                              "— 하네스 온보딩 주입용")
     p_join.set_defaults(func=cmd_join)
+
+    p_occ = sub.add_parser("occupancy", help="기억 원장의 시간 버킷 점유 진단 — 버스트 단작 감지 (read-only)")
+    p_occ.add_argument("--file", default=None, help="검사할 JSONL 경로 (생략 시 .organum/memory/memories.jsonl)")
+    p_occ.add_argument("--capacity", type=int, default=24, help="전체 보존 슬롯 수 (기본 24)")
+    p_occ.add_argument("--bucket-hours", dest="bucket_hours", type=float, default=24.0, help="시간 버킷 너비(시간, 기본 24)")
+    p_occ.add_argument("--bucket-cap", dest="bucket_cap", type=int, default=6, help="버킷당 최대 점유 상한 (기본 6)")
+    p_occ.add_argument("--json", action="store_true", help="기계용 JSON 리포트 출력")
+    p_occ.set_defaults(func=cmd_occupancy)
+
+    p_mf = sub.add_parser("manifest", help="기록 폴더 커버(## Files) 매니페스트 존재 검증 (read-only)")
+    mf_sub = p_mf.add_subparsers(dest="manifest_cmd", required=True)
+    p_mfc = mf_sub.add_parser("check", help="커버 표에 명명된 파일과 영수증이 폴더에 실재하는지 검증")
+    p_mfc.add_argument("directory", nargs="?", default=".", help="검사할 기록 폴더 경로 (기본: 현재 디렉터리)")
+    p_mfc.add_argument("--cover", default="README.md", help="커버 마크다운 파일 이름 (기본: README.md)")
+    p_mfc.add_argument("--gitignore", default=None, help="누락 파일의 gitignore 패턴 설명용 .gitignore 경로 (선택)")
+    p_mfc.add_argument("--receipt-name", dest="receipt_name", default=None, help="필수 영수증 파일 이름 (선택)")
+    p_mfc.add_argument("--json", action="store_true", help="기계용 JSON 리포트 출력")
+    p_mf.set_defaults(func=cmd_manifest)
+
+    p_sg = sub.add_parser("semver-gate", help="엄격한 SemVer 2.0.0 / CalVer 제약 검증 및 CLI 업그레이드 전이 분류 (read-only)")
+    sg_sub = p_sg.add_subparsers(dest="sg_cmd", required=True)
+    p_sgc = sg_sub.add_parser("check", help="버전이 제약 스펙(예: '>= 1.0.0')을 만족하는지 판정")
+    p_sgc.add_argument("version", help="검사할 버전 문자열")
+    p_sgc.add_argument("spec", help="제약 스펙 (예: '>= 1.0.0, < 2.0.0')")
+    p_sgc.add_argument("--allow-prerelease", dest="allow_prerelease", action="store_true", help="안정 범위에서 prerelease 허용")
+    p_sgc.add_argument("--scheme", choices=("semver", "calver"), default="semver", help="버전 체계 (기본 semver)")
+    p_sgc.add_argument("--json", action="store_true", help="기계용 JSON 출력")
+    p_sgt = sg_sub.add_parser("transition", help="CLI before → after 업그레이드 전이 분류")
+    p_sgt.add_argument("before", help="이전 버전 또는 --version 출력 줄")
+    p_sgt.add_argument("after", help="이후 버전 또는 --version 출력 줄")
+    p_sgt.add_argument("--floor", default=None, help="최소 안정 하한 제약 (예: '>= 1.0.0')")
+    p_sgt.add_argument("--scheme", choices=("auto", "semver", "calver"), default="auto", help="버전 체계 (기본 auto)")
+    p_sgt.add_argument("--tool", default=None, help="도구 이름 힌트 (cursor/cursor-agent 등은 자동 CalVer)")
+    p_sgt.add_argument("--no-extract", dest="no_extract", action="store_true", help="--version 줄에서 토큰 자동 추출 끄기")
+    p_sgt.add_argument("--json", action="store_true", help="기계용 JSON 출력")
+    p_sg.set_defaults(func=cmd_semver_gate)
+
+    p_ch = sub.add_parser("chronicle", help="Git blob 지문 기반 YAML 원장 / 마크다운 연대기 파싱·비교 (read-only)")
+    ch_sub = p_ch.add_subparsers(dest="ch_cmd", required=True)
+    p_chc = ch_sub.add_parser("check", help="원장/연대기 파일의 문법·중복 ID 검증 및 Git blob SHA-1 출력")
+    p_chc.add_argument("file", help="검사할 YAML 또는 Markdown 파일")
+    p_chc.add_argument("--format", choices=("auto", "yaml", "switches-yaml", "markdown"), default="auto")
+    p_chc.add_argument("--root-key", dest="root_key", default=None, help="YAML 루트 키 고정 (생략 시 자동 인식)")
+    p_chc.add_argument("--json", action="store_true", help="기계용 JSON 출력")
+    p_chd = ch_sub.add_parser("diff", help="두 스냅샷(파일 둘 또는 Git 리비전 둘)의 항목 단위 diff")
+    p_chd.add_argument("before", help="이전 파일 경로 또는 Git 리비전")
+    p_chd.add_argument("after", help="이후 파일 경로 또는 Git 리비전")
+    p_chd.add_argument("--format", choices=("auto", "yaml", "switches-yaml", "markdown"), default="auto")
+    p_chd.add_argument("--root-key", dest="root_key", default=None, help="YAML 루트 키 고정")
+    p_chd.add_argument("--git-repo", dest="git_repo", default=None, help="Git 리비전 비교 시 레포 경로")
+    p_chd.add_argument("--rel-path", dest="rel_path", default=None, help="--git-repo와 함께 쓸 상대 파일 경로")
+    p_chd.add_argument("--json", action="store_true", help="기계용 JSON 출력")
+    p_ch.set_defaults(func=cmd_chronicle)
+
+    p_ra = sub.add_parser("rule-audit", help="독립 불변조건 규칙 감사 — Verify the Verifier (read-only)")
+    ra_sub = p_ra.add_subparsers(dest="ra_cmd", required=True)
+    p_rad = ra_sub.add_parser("demo", help="내장 FIFO 큐 자기검증 데모(정상·결함·escape 탐지) 실행")
+    p_rad.add_argument("--json", action="store_true", help="기계용 JSON 출력")
+    p_rac = ra_sub.add_parser("check", help="JSON trace 파일을 독립 규칙 팩으로 감사")
+    p_rac.add_argument("trace_file", help="검사할 JSON trace 경로")
+    p_rac.add_argument("--pack", choices=("queue", "hygiene"), default="hygiene", help="적용할 내장 규칙 팩 (기본 hygiene)")
+    p_rac.add_argument("--legacy-verdict", dest="legacy_verdict", default=None, help="기존 검증기 판정(PASS/FAIL — escape 탐지용)")
+    p_rac.add_argument("--json", action="store_true", help="기계용 JSON 출력")
+    p_ra.set_defaults(func=cmd_rule_audit)
+
+    p_zr = sub.add_parser("zero-ref", help="영점 기준(c=0) 동시 통과 검사 — 공허한 일치 PASS 탐지 (read-only)")
+    zr_sub = p_zr.add_subparsers(dest="zr_cmd", required=True)
+    p_zrc = zr_sub.add_parser("check", help="단건 [lo, hi], 후보 c, 허용 오차 m에 대해 0 후보 통과 여부와 T=max(|lo|,|hi|) 판정")
+    p_zrc.add_argument("--lo", required=True, help="기준 구간 하한 lo")
+    p_zrc.add_argument("--hi", required=True, help="기준 구간 상한 hi")
+    p_zrc.add_argument("--candidate", required=True, help="후보 효과 값 c")
+    p_zrc.add_argument("--margin", required=True, help="허용 오차 m (> 0)")
+    p_zrc.add_argument("--id", dest="item_id", default=None, help="항목 식별자 (선택)")
+    p_zrc.add_argument("--inclusive", action="store_true", help="포함 부등호(<=)를 주 판정으로 사용 (기본: 논문 §2.2 엄격 <)")
+    p_zrc.add_argument("--json", action="store_true", help="기계용 JSON 출력")
+    p_zrb = zr_sub.add_parser("batch", help="JSON 배열 또는 JSONL 파일의 여러 항목 일괄 검사")
+    p_zrb.add_argument("file", help="lo/hi/candidate/margin 필드를 담은 JSON 또는 JSONL 파일")
+    p_zrb.add_argument("--inclusive", action="store_true", help="포함 부등호(<=)를 주 판정으로 사용 (기본: 엄격 <)")
+    p_zrb.add_argument("--json", action="store_true", help="기계용 JSON 출력")
+    p_zr.set_defaults(func=cmd_zero_ref)
 
     return parser
 
