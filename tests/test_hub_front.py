@@ -835,14 +835,22 @@ def _place(root: Path, door: str, n: str, q: dict):
 
 
 def _req(url, token, method="GET", body=None):
-    req = urllib.request.Request(url, method=method, data=json.dumps(body).encode() if body else None,
-                                 headers={"Authorization": f"Bearer {token}",
-                                          "Content-Type": "application/json"})
+    # Windows에서 urllib는 헤더·본문을 2회 send()로 나눠 보내 조기 403 응답 시 WinError 10053을
+    # 유발할 수 있다. http.client.HTTPConnection은 단일 버퍼로 전송해 안전하다.
+    import http.client
+    import urllib.parse
+    u = urllib.parse.urlsplit(url)
+    path = u.path + (f"?{u.query}" if u.query else "")
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    conn = http.client.HTTPConnection(u.hostname, u.port, timeout=10)
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            return r.status, json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read() or b"{}")
+        conn.request(method, path, body=data, headers=headers)
+        r = conn.getresponse()
+        raw = r.read()
+        return r.status, json.loads(raw or b"{}")
+    finally:
+        conn.close()
 
 
 def test_front_reads_a_real_drop_with_a_read_only_token(tmp_path):
@@ -876,23 +884,29 @@ def test_front_reads_a_real_drop_with_a_read_only_token(tmp_path):
     assert [(x["door"], x["n"]) for x in r["letters"]] == [(DOOR_A, "001"), (DOOR_A, "003"), (DOOR_B, "002")]
     assert r["letters"][1]["body_size"] == len("셋째 편지, 한글".encode("utf-8"))
     assert _call(f, "mail_get", {"door": DOOR_A, "n": "003"})[1]["body"] == "셋째 편지, 한글"
-    # 창구의 읽기는 드롭의 감사 기록에 그 줄의 id로 남는다
-    def audit_lines():
-        return [json.loads(x) for p in sorted((tmp_path / "audit").glob("audit-*.jsonl"))
-                for x in p.read_text(encoding="utf-8").splitlines()]
-    lines = audit_lines()
-    assert lines and {x["id"] for x in lines} == {"hq-mcp"} and all(x["method"] == "GET" for x in lines)
+    # 창구의 읽기는 드롭의 감사 기록에 그 줄의 id로 남는다 (응답 뒤 기록이라 짧은 동기화 대기)
+    import time as _time
+    def audit_lines(expect_at_least: int = 0):
+        deadline = _time.monotonic() + 1.0
+        while True:
+            out = [json.loads(x) for p in sorted((tmp_path / "audit").glob("audit-*.jsonl"))
+                   for x in p.read_text(encoding="utf-8").splitlines()]
+            if len(out) >= expect_at_least or _time.monotonic() >= deadline:
+                return out
+            _time.sleep(0.01)
+    lines = audit_lines(15)
+    assert len(lines) == 15 and {x["id"] for x in lines} == {"hq-mcp"} and all(x["method"] == "GET" for x in lines)
     # 목록 한 번은 문마다 색인 하나와 봉투 묶음 하나다. 본문 없이 읽었다고 적힌다
     before = len(lines)
     _call(f, "mail_list")
-    new = audit_lines()[before:]
+    new = audit_lines(before + 4)[before:]
     assert [(x.get("op"), x["door"], x.get("bodies")) for x in new] == [
         ("index", "from-alpha", None), (None, "from-alpha", False),
         ("index", "from-beta", None), (None, "from-beta", False)]
     # 남의 앞 편지를 청하면 봉투만 읽고 끝난다
-    before = len(audit_lines())
+    before = len(audit_lines(before + 4))
     assert _call(f, "mail_get", {"door": DOOR_A, "n": "002"})[0]["isError"] is True
-    assert [x.get("bodies") for x in audit_lines()[before:]] == [False]
+    assert [x.get("bodies") for x in audit_lines(before + 1)[before:]] == [False]
     # 드롭이 그 문을 닫으면 창구도 못 읽는다 — 좁힘은 드롭에 있다
     narrow = _front(reader=hf.DropReader(url, "tok-narrow", timeout=10))
     result, r = _call(narrow, "mail_list")

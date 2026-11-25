@@ -299,7 +299,7 @@ def open_ledger(*, hub_dir, outbox_dir, door, drop_url, token, trusted_pubkeys, 
             shutil.rmtree(out, ignore_errors=True)
             raise SendStopped("the restored outbox belongs to another door")
         report.update(restored=True, generation=r["generation"], signed_by=r["signed_by"],
-                      events=r["events"])
+                      events=r["events"], unexported=list(r.get("unexported") or []))
     known = (hs.load_record(hub).get("outboxes") or {}).get(name, {}).get("door")
     if known is not None and known != door:
         raise SendStopped("this ledger's outbox belongs to another door")

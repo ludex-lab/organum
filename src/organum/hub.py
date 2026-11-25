@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import time
 import uuid
@@ -208,10 +209,20 @@ def _item(m: dict) -> dict:
     }
 
 
+_COLLISION_SEQ_RE = re.compile(r"-(\d+)\.md$")
+
+
+def _collision_seq(name: str) -> int:
+    """같은 초·같은 mtime(Windows NTFS ~15ms 해상도) 충돌 시 '-2.md' > '.md' 순서를 보존한다."""
+    m = _COLLISION_SEQ_RE.search(name)
+    return int(m.group(1)) if m else 0
+
+
 def _sort_key(m: dict) -> tuple:
-    """oldest-first 정렬 키 = (mtime, file). 파일명만 쓰면 같은 초의 `-2.md`가 `.md`보다 앞서는
-    lexicographic 함정('-'<'.')이 있어 mtime을 1차 키로. cursor 비교도 같은 키를 쓴다."""
-    return (m["_mtime"], m["file"])
+    """oldest-first 정렬 키 = (mtime, collision_seq, file). 파일명만 쓰면 같은 초의 `-2.md`가
+    `.md`보다 앞서는 lexicographic 함정('-'<'.')이 있고, Windows NTFS mtime은 ~15ms 해상도라
+    같은 틱 충돌을 collision_seq로 깬다. cursor 비교도 같은 키를 쓴다."""
+    return (m["_mtime"], _collision_seq(m["file"]), m["file"])
 
 
 def _matched(cell_id: str, include_read: bool) -> list[dict]:
@@ -261,7 +272,8 @@ def inbox(cell_id: str, cursor: str | None = None, limit: int = DEFAULT_LIMIT,
     matched = _matched(cell_id, include_read)
     if cursor:  # cursor 파일의 정렬키 이후만(파일이 ACK돼 read_set에 있어도 디스크엔 남아 mtime 읽힘)
         cpath = _f.field_dir(_base(), RELAY_FIELD) / cursor
-        ckey = (cpath.stat().st_mtime, cursor) if cpath.is_file() else (0.0, cursor)
+        ckey = ((cpath.stat().st_mtime, _collision_seq(cursor), cursor)
+                if cpath.is_file() else (0.0, _collision_seq(cursor), cursor))
         matched = [m for m in matched if _sort_key(m) > ckey]
     limit = max(1, int(limit))
     page = matched[:limit]

@@ -287,12 +287,14 @@ class AgyAdapter(Adapter):
 
     def _belongs(self, tp: Path, cwd: str) -> bool:
         # Tier-1 cwd join: tool arg 절대경로가 cwd를 포함하면 이 세션 = cwd (첫 400줄 사전검사)
+        # JSONL 안의 Windows 백슬래시는 '\\'로 이스케이프되므로 JSON 리터럴 표기도 함께 확인한다.
+        needles = {cwd, json.dumps(cwd)[1:-1]}
         try:
             with open(tp, encoding="utf-8", errors="replace") as fh:
                 for i, line in enumerate(fh):
                     if i > 400:
                         break
-                    if cwd in line:
+                    if any(n in line for n in needles):
                         return True
         except OSError:
             return False

@@ -245,6 +245,32 @@ def build_message_envelope(cfg, *, signer, key_id, epoch, to_lab, to_id, to_epoc
                           created_at=created_at)
 
 
+def build_rotate_key_envelope(cfg, *, signer, key_id, epoch,
+                              new_key_id: str, new_epoch: int, new_pubkey: str,
+                              created_at: str | None = None) -> dict:
+    """key.rotated 봉투(순수 빌더). cli와 호스팅이 같은 모양으로 짓는다(㉗)."""
+    return build_envelope(
+        cfg, "key.rotated",
+        {"new_key_id": new_key_id, "new_key_epoch": new_epoch, "new_pubkey": new_pubkey},
+        signer=signer, key_id=key_id, epoch=epoch,
+        subject={"type": "machine", "id": "machine:" + cfg["machine_id"]},
+        created_at=created_at,
+    )
+
+
+def build_revoke_key_envelope(cfg, *, signer, key_id, epoch,
+                              revoke_key_id: str, revoke_epoch: int, reason: str,
+                              created_at: str | None = None) -> dict:
+    """key.revoked 봉투(순수 빌더). cli와 호스팅이 같은 모양으로 짓는다(㉗)."""
+    return build_envelope(
+        cfg, "key.revoked",
+        {"key_id": revoke_key_id, "key_epoch": revoke_epoch, "reason": reason},
+        signer=signer, key_id=key_id, epoch=epoch,
+        subject={"type": "machine", "id": "machine:" + cfg["machine_id"]},
+        created_at=created_at,
+    )
+
+
 # ── 쓰기 ─────────────────────────────────────────────────────────────────────
 
 def sign_and_admit(d, cfg, hub, env: dict, seed: bytes) -> dict:

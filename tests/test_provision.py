@@ -79,7 +79,7 @@ class TestProvision(unittest.TestCase):
             annex = work / ".organum"
             self.assertTrue(annex.is_dir())
             self.assertEqual(result["wired"], ["memory"])
-            events = [json.loads(l) for l in (annex / "memory" / "events.jsonl").read_text().splitlines() if l.strip()]
+            events = [json.loads(l) for l in (annex / "memory" / "events.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
             self.assertTrue(any(e["kind"] == "provision" for e in events))
 
     def test_untrusted_refused_no_annex(self):
@@ -95,7 +95,7 @@ class TestProvision(unittest.TestCase):
             st.init_state_dir(work, "host")
             with self.assertRaises(provision.ProvisionError):
                 provision.provision(_skill(Path(td), "s"), work)
-            events = [json.loads(l) for l in (work / ".organum" / "memory" / "events.jsonl").read_text().splitlines() if l.strip()]
+            events = [json.loads(l) for l in (work / ".organum" / "memory" / "events.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
             self.assertTrue(any("provision refused" in e.get("content", "") for e in events))
 
 

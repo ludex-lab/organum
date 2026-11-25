@@ -195,9 +195,9 @@ def test_범위_밖_요청은_멤버의_요청이라_예산을_쓴다(tmp_path):
         assert _req(host, "GET", "/v0/hub-ops/from-lxm", "tok-jdot")[0] == 403  # 예산 1
         assert _req(host, "GET", "/v0/hub-ops/from-lxm", "tok-jdot")[0] == 429
         assert _req(host, "GET", "/v0/not-a-door", "tok-jdot")[0] == 429
-        assert [l["status"] for l in _audit_lines(adir)] == [403, 429, 429]     # 401은 안 남는다
     finally:
-        srv.shutdown()
+        srv.shutdown()                                                          # 응답 뒤 감사 기록 완료 동기화
+    assert [l["status"] for l in _audit_lines(adir)] == [403, 429, 429]         # 401은 안 남는다
 
 
 # ── 감사 기록 ─────────────────────────────────────────────────────────────────
@@ -338,8 +338,8 @@ def test_발신함_번호_스캔은_줄바꿈_든_파일_이름을_세지_않는
 # ── CLI 배선 ──────────────────────────────────────────────────────────────────
 
 def _cli(args):
-    env = {**os.environ, "PYTHONPATH": str(SRC)}
-    return subprocess.run(CLI + args, env=env, capture_output=True, text=True, timeout=120)
+    env = {**os.environ, "PYTHONPATH": str(SRC), "PYTHONUTF8": "1"}
+    return subprocess.run(CLI + args, env=env, capture_output=True, text=True, encoding="utf-8", timeout=120)
 
 
 def test_CLI_check_tokens는_값_없이_id와_범위만_보인다(tmp_path):

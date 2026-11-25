@@ -656,10 +656,17 @@ class MailFront(_Front):
                         more = True
                         break
                     n = entry["n"]
-                    raw = self._one_envelope(d, n, batch, deadline, trail)
+                    try:
+                        raw = self._one_envelope(d, n, batch, deadline, trail)
+                    except LookupError:
+                        raw = None
                     examined += 1
                     trail["examined"].append([d, n])
                     positions[d] = n                      # 내 앞이 아닌 편지도 지나간다
+                    if raw is None:
+                        problems.append({"door": d, "n": n,
+                                         "problem": "envelope missing from the door"})
+                        continue
                     if entry.get("envelope_sha256") not in (None, _sha(raw)):
                         problems.append({"door": d, "n": n,
                                          "problem": "envelope differs from the door index"})

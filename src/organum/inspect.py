@@ -16,6 +16,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import re
 import shutil
 import time
 import unicodedata
@@ -71,7 +72,7 @@ def effective_prices(path_override: str | None = None) -> dict:
 
 
 def _mangle(cwd: Path) -> str:
-    return str(cwd.resolve()).replace("/", "-")
+    return re.sub(r"[:/\\]", "-", str(cwd.resolve()))
 
 
 def find_transcript(cwd: Path, override: str | None = None) -> Path | None:

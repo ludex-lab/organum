@@ -264,23 +264,26 @@ class TestBrainRoleJoin(unittest.TestCase):
 
     def test_marker_case_insensitive(self):
         # 재감사4 Blocker2: case-varied 마커 반복은 same identity(found), 진짜 다른 건 ambiguous
+        # Windows NTFS mtime 해상도(~15ms) + 동일 바이트 길이(38B) 캐시 충돌 방지를 위해 별도 파일 사용
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "t.jsonl"
-            p.write_text("ORGANUM_CELL=Agent\nORGANUM_CELL=agent\n", encoding="utf-8")
-            self.assertEqual(self._fd(p, ["agent"]), ("agent", "found"))          # 같은 셀
-            p.write_text("ORGANUM_CELL=Agent\nORGANUM_CELL=other\n", encoding="utf-8")
-            self.assertEqual(self._fd(p, ["agent", "other"]), (None, "marker-ambiguous"))  # 진짜 애매
+            p1 = Path(td) / "same.jsonl"
+            p1.write_text("ORGANUM_CELL=Agent\nORGANUM_CELL=agent\n", encoding="utf-8")
+            self.assertEqual(self._fd(p1, ["agent"]), ("agent", "found"))          # 같은 셀
+            p2 = Path(td) / "ambig.jsonl"
+            p2.write_text("ORGANUM_CELL=Agent\nORGANUM_CELL=other\n", encoding="utf-8")
+            self.assertEqual(self._fd(p2, ["agent", "other"]), (None, "marker-ambiguous"))  # 진짜 애매
 
     def test_marker_left_boundary(self):
         # 긴 identifier의 suffix를 마커로 승격하면 안 된다 — 시작 경계 계약 (critic 재감사-6)
         with tempfile.TemporaryDirectory() as td:
-            p = Path(td) / "t.jsonl"
-            for bad in ("NOT_ORGANUM_CELL=alpha\n", "XORGANUM_CELL=alpha\n", "_ORGANUM_CELL=alpha\n"):
+            for i, bad in enumerate(("NOT_ORGANUM_CELL=alpha\n", "XORGANUM_CELL=alpha\n", "_ORGANUM_CELL=alpha\n")):
+                p = Path(td) / f"bad-{i}.jsonl"
                 p.write_text(bad, encoding="utf-8")
                 self.assertEqual(self._fd(p, ["alpha"]), (None, "no-marker"))  # 마커 아님
             # 진짜 마커는 시작 경계(줄 시작·공백·JSON 따옴표)에서 계속 found (대조군)
-            for good in ("ORGANUM_CELL=alpha\n", "export ORGANUM_CELL=alpha   # ok\n",
-                         '{"c":"...ORGANUM_CELL=alpha\\n..."}\n'):
+            for i, good in enumerate(("ORGANUM_CELL=alpha\n", "export ORGANUM_CELL=alpha   # ok\n",
+                                      '{"c":"...ORGANUM_CELL=alpha\\n..."}\n')):
+                p = Path(td) / f"good-{i}.jsonl"
                 p.write_text(good, encoding="utf-8")
                 self.assertEqual(self._fd(p, ["alpha"]), ("alpha", "found"))
 
@@ -459,6 +462,9 @@ class TestBrainRoleJoin(unittest.TestCase):
             self.assertEqual(r["join_status"], "scan-incomplete")
 
     def test_record_level_unreadable_dir(self):
+        import os as _os
+        if _os.name != "posix":
+            self.skipTest("비-POSIX: chmod(0)은 파일 읽기 권한을 차단하지 않는다")
         from organum import web
         with tempfile.TemporaryDirectory() as td:
             sd, _ = st.init_state_dir(Path(td), "owner")

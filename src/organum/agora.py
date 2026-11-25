@@ -10,12 +10,20 @@ relay와 엔벨로프·스레드·watch·읽음커서·가입을 [[field]]에서
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 
 from organum import field as _f
 
 FIELD = "agora"
+_COLLISION_SEQ_RE = re.compile(r"-(\d+)\.md$")
+
+
+def _collision_seq(name: str) -> int:
+    """같은 초·같은 mtime(Windows ~15ms 해상도) 충돌 시 '-2.md' > '.md' 순서를 보존한다."""
+    m = _COLLISION_SEQ_RE.search(name)
+    return int(m.group(1)) if m else 0
 
 
 def agora_dir(cwd: Path) -> Path:
@@ -54,10 +62,10 @@ def latest_goal(cwd: Path, topic: str = GOAL_TOPIC) -> dict | None:
         meta = _f.get_meta(cwd, FIELD, p.name)
         if not meta or (meta.get("topic") or "").strip().lower() != topic:
             continue
-        # 최신순 = (ts, mtime, file). ts=초-granularity라 같은 초 갱신은 mtime(sub-second, 생성순)으로
-        # tie-break — 파일명만 쓰면 '-2.md'<'.md'(0x2d<0x2e)라 최신을 못 고른다(hub와 같은 함정).
+        # 최신순 = (ts, mtime_ns, collision_seq, file). ts=초-granularity이고 Windows NTFS는 mtime이
+        # ~15ms 해상도라 같은 틱 충돌 시 '-2.md'<'.md'(0x2d<0x2e) 역전을 막기 위해 접미 순번을 넣는다.
         try:
-            key = (meta.get("ts") or "", p.stat().st_mtime, p.name)
+            key = (meta.get("ts") or "", p.stat().st_mtime_ns, _collision_seq(p.name), p.name)
         except OSError:
             continue
         if best_key is None or key > best_key:

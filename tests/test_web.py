@@ -149,7 +149,7 @@ class TestWebPayload(unittest.TestCase):
                 self.down.set()
 
         f = Fake()
-        web._reap_when_idle(f, idle_min=0.002, tick_s=0.02)   # ≈0.12초 타임아웃
+        web._reap_when_idle(f, idle_min=0.05, tick_s=0.02)    # 3초 타임아웃 — CI 스레드 지연에도 안전
         f.last_request = _time.time()                          # 방금 뷰어 요청
         _time.sleep(0.05)
         self.assertFalse(f.down.is_set())                      # 아직 안 죽음

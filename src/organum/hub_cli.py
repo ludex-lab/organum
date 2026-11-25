@@ -344,11 +344,10 @@ def _sign_here_or_elsewhere(a, d, cfg, hub, env) -> int:
 
 def cmd_rotate_key(a):
     d, cfg, hub = _load(a.dir)
-    env = _build_envelope(cfg, "key.rotated",
-                          {"new_key_id": a.new_key_id, "new_key_epoch": a.new_epoch,
-                           "new_pubkey": a.new_pubkey},
-                          signer=a.signer, key_id=a.key_id, epoch=a.epoch,
-                          subject={"type": "machine", "id": "machine:" + cfg["machine_id"]})
+    env = ho.build_rotate_key_envelope(
+        cfg, signer=a.signer, key_id=a.key_id, epoch=a.epoch,
+        new_key_id=a.new_key_id, new_epoch=a.new_epoch, new_pubkey=a.new_pubkey,
+    )
     return _sign_here_or_elsewhere(a, d, cfg, hub, env)
 
 
@@ -372,11 +371,10 @@ def cmd_introduce_signer(a):
 
 def cmd_revoke_key(a):
     d, cfg, hub = _load(a.dir)
-    env = _build_envelope(cfg, "key.revoked",
-                          {"key_id": a.revoke_key_id, "key_epoch": a.revoke_epoch,
-                           "reason": a.reason},
-                          signer=a.signer, key_id=a.key_id, epoch=a.epoch,
-                          subject={"type": "machine", "id": "machine:" + cfg["machine_id"]})
+    env = ho.build_revoke_key_envelope(
+        cfg, signer=a.signer, key_id=a.key_id, epoch=a.epoch,
+        revoke_key_id=a.revoke_key_id, revoke_epoch=a.revoke_epoch, reason=a.reason,
+    )
     return _sign_here_or_elsewhere(a, d, cfg, hub, env)
 
 

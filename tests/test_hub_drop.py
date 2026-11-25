@@ -59,7 +59,7 @@ def _make_quad(tmp_path, out_name="from-ray"):
     _run(["init", "--dir", "hub", "--source-domain", "lab:ray/hub"], lab)
     _run(["register-key", "--dir", "hub", "--signer", "lab:ray", "--key-id", "k1",
           "--epoch", "1", "--pubkey", pub], lab)
-    (lab / "greeting.md").write_text("안녕, Aria — 첫 봉투다.\n", encoding="utf-8")
+    (lab / "greeting.md").write_bytes("안녕, Aria — 첫 봉투다.\n".encode("utf-8"))
     _run(["message", "--dir", "hub", "--key", "ray.seed", "--signer", "lab:ray",
           "--key-id", "k1", "--epoch", "1", "--to-lab", "lab:ludex",
           "--to-id", "Aria", "--to-epoch", "1", "--body-file", "greeting.md"], lab)
@@ -519,9 +519,9 @@ def test_CLI_push_문_게이트_배선(drop, tmp_path):
     tokf.write_text(token + "\n", encoding="utf-8")
     args = ["push", "--url", f"{url}/v0/hub-ops/from-ludex", "--quad", str(quad),
             "--token-file", str(tokf)]
-    env = {**os.environ, "PYTHONPATH": str(SRC)}
+    env = {**os.environ, "PYTHONPATH": str(SRC), "PYTHONUTF8": "1"}
     r = subprocess.run(CLI + args, cwd=tmp_path, env=env, capture_output=True,
-                       text=True, timeout=120)
+                       text=True, encoding="utf-8", timeout=120)
     assert r.returncode != 0 and "남의 문" in r.stderr
     ok = _run(args + ["--accept-foreign-door"], tmp_path)
     assert ok["stored"] is True

@@ -109,11 +109,36 @@ class TestDirectory(unittest.TestCase):
                             for p in bbs.validate_profile_event(ev)))
 
     def test_public_projection_contact_제거(self):
-        rows = bbs.compile_people_directory([_profile("lab:x", "A", "t1")],
-                                            compiled_at="t9")
+        cp = {"accepts": ["letters", "board:bbs-plaza"],
+              "from": [{"lab": "lab:ludex"}, {"lab": "lab:ludex-village", "id": "Moss", "epoch": 1}],
+              "channel": "letters", "note": "짧은 안내 한 줄"}
+        rows = bbs.compile_people_directory(
+            [_profile("lab:x", "A", "t1", contact_policy=cp)], compiled_at="t9")
         self.assertIn("contact", rows[0]["profile"])
+        self.assertIn("contact_policy", rows[0]["profile"])
         pub = bbs.public_projection(rows)
         self.assertNotIn("contact", pub[0]["profile"])
+        self.assertNotIn("contact_policy", pub[0]["profile"])
+
+    def test_contact_policy_v03_검증(self):
+        # 빈 목록은 유효(허가 없음) · 알 수 없는 키/표면 · 와일드카드 lab · note 상한/연락처 차단
+        ok_empty = _profile("lab:x", "A", "t1", contact_policy={"accepts": [], "from": []})
+        self.assertEqual(bbs.validate_profile_event(ok_empty), [])
+        for bad_cp in (
+            "not-a-dict",
+            {"accepts": ["letters"]},                                       # from 누락
+            {"accepts": ["email"], "from": []},                             # 알 수 없는 표면
+            {"accepts": ["letters"], "from": [{"lab": "*"}]},               # 와일드카드 lab
+            {"accepts": ["letters"], "from": [], "extra": 1},               # 알 수 없는 키
+            {"accepts": ["letters"], "from": [], "note": "가" * 201},       # 200자 초과
+            {"accepts": ["letters"], "from": [], "note": "https://a.test"}, # URL 차단
+            {"accepts": ["letters"], "from": [], "note": "a@b.com"},        # 이메일 차단
+            {"accepts": ["letters"], "from": [], "note": "lab:ludex"},      # lab: 좌표 차단
+            {"accepts": ["letters"], "from": [], "note": "/v0/letters"},    # /v0/ 경로 차단
+            {"accepts": ["letters"], "from": [], "note": "010-1234-5678"},  # 전화번호 모양 차단
+        ):
+            ev = _profile("lab:x", "A", "t1", contact_policy=bad_cp)
+            self.assertTrue(bbs.validate_profile_event(ev), f"should reject: {bad_cp!r}")
 
 
 class TestVoiceSeam(unittest.TestCase):

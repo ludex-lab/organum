@@ -105,7 +105,7 @@ def _site_session_gate(state_dir: Path, cell_id: str, role: str):
             f"organum: canonical cell '{st.cell_key(cell_id)}'의 열린 세션이 {len(opens)}개 — 충돌(수동 "
             "병합 필요). 'organum session end'로 정리 후 재시도.")
     s = opens[0]
-    if s.get("soma") and Path(s["soma"]) != st.soma_dir(state_dir, cell_id):
+    if s.get("soma") and Path(s["soma"]).parts != st.soma_dir(state_dir, cell_id).parts:
         raise SystemExit(
             f"organum: 이 셀의 열린 세션이 legacy soma 경로({s['soma']})에 있습니다 — case/dot 형식 이전 "
             "잔재. 'organum session end'로 닫고 백업 후 수동 migrate 필요(개인 데이터 보존). 자동 생성 안 함.")
@@ -1571,24 +1571,54 @@ def cmd_zero_ref(args: argparse.Namespace) -> int:
     return 1
 
 
+# 1.x 표면 계약 분류 (Gate 1): 모든 최상위 하위 명령은 STABLE 또는 EXPERIMENTAL 중 하나에 속한다.
+STABLE_ENTRYPOINTS: frozenset[str] = frozenset({
+    "organum",
+    "organum-inspector",
+    "organum-hub",
+    "organum-bbs",
+})
+STABLE_COMMANDS: frozenset[str] = frozenset({
+    "inspector",
+    "occupancy",
+    "manifest",
+    "semver-gate",
+    "chronicle",
+    "rule-audit",
+    "zero-ref",
+})
+EXPERIMENTAL_COMMANDS: frozenset[str] = frozenset({
+    "init", "context", "remember", "recall", "map", "distill", "reflect",
+    "migrate", "checkup", "backup", "restore", "provision", "inspect",
+    "live", "web", "bench", "observatory", "mcp", "relay", "roster",
+    "agora", "hub", "alarm", "session", "join",
+})
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="organum",
         description="Organism Engineering CLI — 상태와 규율의 도구 (에이전트가 아님).",
+        epilog=(
+            "표면 구분: [stable] 명령과 독립 CLI(organum-inspector · organum-hub · organum-bbs)는 "
+            "1.x 호환 계약 대상(--json 스키마·종료코드 고정)입니다. "
+            "[experimental] 명령은 연구·현장 검증 중이며 1.0 전에 변경될 수 있습니다. "
+            "자세히: manual/surface-contract.md"
+        ),
     )
     parser.add_argument("--version", action="version", version=f"organum {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p_init = sub.add_parser("init", help=".organum/ 상태 디렉터리 생성 + 지도 시드")
+    p_init = sub.add_parser("init", help="[experimental] .organum/ 상태 디렉터리 생성 + 지도 시드")
     p_init.add_argument("--agent", default="agent", help="이 인스턴스를 운용하는 에이전트 이름")
     p_init.set_defaults(func=cmd_init)
 
-    p_ctx = sub.add_parser("context", help="[Self]+[Map]+[WM] 주입 블록을 stdout으로")
+    p_ctx = sub.add_parser("context", help="[experimental] [Self]+[Map]+[WM] 주입 블록을 stdout으로")
     p_ctx.add_argument("--for", dest="for_id", default=None,
                        help="이 세포 id — 공존 게스트면 자기 soma의 [Self]. 생략=owner (§2.3)")
     p_ctx.set_defaults(func=cmd_context)
 
-    p_rem = sub.add_parser("remember", help="기억 저장 — guard 저장 경계 경유 (§7)")
+    p_rem = sub.add_parser("remember", help="[experimental] 기억 저장 — guard 저장 경계 경유 (§7)")
     p_rem.add_argument("content", help="기억할 내용 (레코드당 한 주장)")
     p_rem.add_argument("--type", choices=memory.VALID_TYPES, default="episodic")
     p_rem.add_argument("--tags", default="", help="쉼표 구분. 규약: field:<맥락> · place:<map 경로>")
@@ -1598,13 +1628,13 @@ def build_parser() -> argparse.ArgumentParser:
                        help="이 세포 id — 공존 게스트면 자기 soma에 저장. 생략=owner (§2.3)")
     p_rem.set_defaults(func=cmd_remember)
 
-    p_rec = sub.add_parser("recall", help="시간창 질의 — 지난 N시간 무슨 일이 있었나")
+    p_rec = sub.add_parser("recall", help="[experimental] 시간창 질의 — 지난 N시간 무슨 일이 있었나")
     p_rec.add_argument("--when", required=True, help="시간창: 30m · 24h · 7d · 2w")
     p_rec.add_argument("--for", dest="for_id", default=None,
                        help="이 세포 id — 공존 게스트면 자기 soma 조회. 생략=owner (§2.3)")
     p_rec.set_defaults(func=cmd_recall)
 
-    p_map = sub.add_parser("map", help="리포 지도 (GIVEN-MAP 시드 + frontier)")
+    p_map = sub.add_parser("map", help="[experimental] 리포 지도 (GIVEN-MAP 시드 + frontier)")
     map_sub = p_map.add_subparsers(dest="map_cmd")
     map_sub.add_parser("frontier", help="미탐험(안 읽은) 파일 목록")
     pm_mark = map_sub.add_parser("mark", help="파일을 read로 마킹 (+blob sha 캡처)")
@@ -1613,7 +1643,7 @@ def build_parser() -> argparse.ArgumentParser:
     map_sub.add_parser("sync", help="재열거 병합: 신규=unvisited, 소실 제거, read 보존")
     p_map.set_defaults(func=cmd_map, map_cmd=None)
 
-    p_dis = sub.add_parser("distill", help="세션 자료 → 세계모델 (프로파일: map=form강제 / prose=서술; form>content는 도메인-특정, P3 null)")
+    p_dis = sub.add_parser("distill", help="[experimental] 세션 자료 → 세계모델 (프로파일: map=form강제 / prose=서술; form>content는 도메인-특정, P3 null)")
     p_dis.add_argument("--domain", required=True, help="세계모델 도메인 슬러그 ([a-z0-9-]+)")
     p_dis.add_argument("--profile", choices=distill_mod.PROFILES, required=True,
                        help="명시 선택 필수 — map=form-shaped 강제(탐험 도메인 검증) / prose=서술 허용(코딩 등 form 이득 없는 도메인). form>content는 도메인-특정(P3 null)이라 기본값을 두지 않는다")
@@ -1623,7 +1653,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_dis.add_argument("--override-streak", action="store_true", help="guard streak 활성 시에도 강제 위임")
     p_dis.set_defaults(func=cmd_distill)
 
-    p_ref = sub.add_parser("reflect", help="세션 회고 → self.md carry-forward (§3.2)")
+    p_ref = sub.add_parser("reflect", help="[experimental] 세션 회고 → self.md carry-forward (§3.2)")
     p_ref.add_argument("--pattern", action="append", default=[], help="Patterns 섹션에 항목 추가 (반복 가능, 끝에 (evidence: ...))")
     p_ref.add_argument("--lesson", action="append", default=[], help="Lessons 섹션에 항목 추가 (반복 가능)")
     p_ref.add_argument("--question", action="append", default=[], help="Open questions에 항목 추가 (반복 가능)")
@@ -1633,36 +1663,36 @@ def build_parser() -> argparse.ArgumentParser:
                        help="이 세포 id — 공존 게스트면 자기 soma의 self.md. 생략=owner (§2.3)")
     p_ref.set_defaults(func=cmd_reflect)
 
-    p_mig = sub.add_parser("migrate", help="포맷 버전 마이그레이션 (§10 — 자동 backup 후 변환)")
+    p_mig = sub.add_parser("migrate", help="[experimental] 포맷 버전 마이그레이션 (§10 — 자동 backup 후 변환)")
     p_mig.set_defaults(func=cmd_migrate)
 
-    p_chk = sub.add_parser("checkup", help="상태 건강 점검 (streak·무결성·staleness·백업). 기본 진단만.")
+    p_chk = sub.add_parser("checkup", help="[experimental] 상태 건강 점검 (streak·무결성·staleness·백업). 기본 진단만.")
     p_chk.add_argument("--sync-map", action="store_true", help="map 드리프트를 병합까지 (기본 진단만 — [shared] 파일 쓰기는 명시 opt-in, ERROR 시 스킵)")
     p_chk.set_defaults(func=cmd_checkup)
 
-    p_bak = sub.add_parser("backup", help="상태 스냅샷 tar.gz 생성 (tmp/ 제외, day 1 기능)")
+    p_bak = sub.add_parser("backup", help="[experimental] 상태 스냅샷 tar.gz 생성 (tmp/ 제외, day 1 기능)")
     p_bak.add_argument("--to", default=None, help="목적지 디렉터리 (기본: ~/.organum/backups/...)")
     p_bak.set_defaults(func=cmd_backup)
 
-    p_res = sub.add_parser("restore", help="스냅샷에서 .organum/ 복원 (기존 상태는 보존)")
+    p_res = sub.add_parser("restore", help="[experimental] 스냅샷에서 .organum/ 복원 (기존 상태는 보존)")
     p_res.add_argument("archive", help="organum backup이 만든 tar.gz 경로")
     p_res.add_argument("--force", action="store_true", help="기존 .organum/이 있어도 진행")
     p_res.set_defaults(func=cmd_restore)
 
-    p_prov = sub.add_parser("provision", help="변환된 Agent Skill에 조직 배선 (신뢰 출처 감사)")
+    p_prov = sub.add_parser("provision", help="[experimental] 변환된 Agent Skill에 조직 배선 (신뢰 출처 감사)")
     p_prov.add_argument("skill_dir", help="SKILL.md를 포함한 skill 디렉터리")
     p_prov.add_argument("--into", default=".", help="provision 대상 작업 디렉터리 (기본: cwd)")
     p_prov.add_argument("--trust", action="store_true", help="신뢰 출처 미선언 skill도 provision (감사는 수행)")
     p_prov.set_defaults(func=cmd_provision)
 
-    p_ins = sub.add_parser("inspect", help="라이브 유기체 vitals (세션 transcript tail — read-only 관찰)")
+    p_ins = sub.add_parser("inspect", help="[experimental] 라이브 유기체 vitals (세션 transcript tail — read-only 관찰)")
     p_ins.add_argument("--once", action="store_true", help="한 번만 렌더하고 종료 (파이프/테스트용)")
     p_ins.add_argument("--interval", type=float, default=1.0, help="갱신 주기(초, 기본 1.0)")
     p_ins.add_argument("--transcript", default=None, help="transcript.jsonl 직접 지정 (자동탐지 실패 시)")
     p_ins.add_argument("--all", action="store_true", help="이 현장의 활성 세션(세포) 전부 수렴 — 멀티-에이전트 뷰")
     p_ins.set_defaults(func=cmd_inspect)
 
-    p_liv = sub.add_parser("live", help="tmux 런처: 네이티브 CLI 작업 + organum inspect 나란히")
+    p_liv = sub.add_parser("live", help="[experimental] tmux 런처: 네이티브 CLI 작업 + organum inspect 나란히")
     p_liv.add_argument("--cli", default=None, help="왼쪽 pane에서 자동 실행할 CLI (기본: 셸 — 직접 claude 실행)")
     p_liv.add_argument("--session", default="organum", help="tmux 세션 이름 (기본: organum)")
     p_liv.add_argument("--fresh", action="store_true", help="기존 세션을 죽이고 새로 시작 (옛 프로세스 재사용 방지)")
@@ -1670,7 +1700,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_liv.add_argument("--stop", action="store_true", help="실행 중인 세션 종료 (tmux 서버는 창 닫아도 남는다 — 이게 OFF 스위치)")
     p_liv.set_defaults(func=cmd_live)
 
-    p_web = sub.add_parser("web", help="관제탑 — localhost 웹으로 현장의 모든 세포 수렴 (관측 read-only · 게시판 human-write · init 없인 관측만)")
+    p_web = sub.add_parser("web", help="[experimental] 관제탑 — localhost 웹으로 현장의 모든 세포 수렴 (관측 read-only · 게시판 human-write · init 없인 관측만)")
     p_web.add_argument("--port", type=int, default=7332, help="포트 (기본 7332, 사용 중이면 다음 것 시도)")
     p_web.add_argument("--host", default="127.0.0.1", help="바인드 호스트 (기본 127.0.0.1 = localhost)")
     p_web.add_argument("--idle-timeout", type=float, default=120,
@@ -1679,14 +1709,14 @@ def build_parser() -> argparse.ArgumentParser:
                        help="비-loopback 바인드에서도 게시판 쓰기 허용 (기본 금지 — 원격은 관측만; 위험 승인)")
     p_web.set_defaults(func=cmd_web)
 
-    p_insp2 = sub.add_parser("inspector", help="사후 계측 — 임의 폴더의 에이전트 세션 소급 집계 (read-only·init 불요; 라이브 tail은 'inspect')")
+    p_insp2 = sub.add_parser("inspector", help="[stable] 사후 계측 — 임의 폴더의 에이전트 세션 소급 집계 (read-only·init 불요; 라이브 tail은 'inspect')")
     p_insp2.add_argument("path", nargs="?", default=".", help="프로젝트 폴더 (기본: 현재 폴더)")
     p_insp2.add_argument("--window", type=float, default=45, help="발견 창(일, 기본 45)")
     p_insp2.add_argument("--json", action="store_true", help="기계용 JSON 출력")
     p_insp2.add_argument("--html", metavar="FILE", help="자립형 HTML 리포트로 저장")
     p_insp2.set_defaults(func=cmd_inspector)
 
-    p_bench = sub.add_parser("bench", help="협업벤치 — 피어저널 수확·집계 (read-only · verbatim+provenance, 축 코딩 없음)")
+    p_bench = sub.add_parser("bench", help="[experimental] 협업벤치 — 피어저널 수확·집계 (read-only · verbatim+provenance, 축 코딩 없음)")
     bench_sub = p_bench.add_subparsers(dest="bench_cmd", required=True)
     pb_peers = bench_sub.add_parser("peers", help="사이트 피어저널 피어별 집계 — 여러 세션·평가자의 관측을 한 화면에")
     pb_peers.add_argument("--peer", default=None, help="한 피어 상세 (verbatim strengths/frictions/role_fit + provenance)")
@@ -1698,7 +1728,7 @@ def build_parser() -> argparse.ArgumentParser:
     pb_cells.add_argument("--json", action="store_true", help="기계용 JSON {cells,rows_n}")
     p_bench.set_defaults(func=cmd_bench)
 
-    p_obs = sub.add_parser("observatory", help="관측 영속화 — 세션 소비 스냅샷 축적(월 샤드)·통계 (transcript ~30일 시한부 대비)")
+    p_obs = sub.add_parser("observatory", help="[experimental] 관측 영속화 — 세션 소비 스냅샷 축적(월 샤드)·통계 (transcript ~30일 시한부 대비)")
     obs_sub = p_obs.add_subparsers(dest="obs_cmd", required=True)
     po_sync = obs_sub.add_parser("sync", help="발견 가능한 세션 전부 스윕 → 신규/전진분만 기록 (멱등)")
     po_sync.add_argument("--window", type=float, default=45, help="발견 창(일, 기본 45 — transcript 청소 주기보다 넓게)")
@@ -1743,11 +1773,11 @@ def build_parser() -> argparse.ArgumentParser:
     po_int.add_argument("--json", action="store_true", help="기계용 JSON [{path,status,since,drift_days,fossil}]")
     p_obs.set_defaults(func=cmd_observatory)
 
-    p_mcp = sub.add_parser("mcp", help="MCP(stdio) 서버 — 조율(relay/agora/roster)을 MCP 툴로 노출 (한 세포). MCP 에이전트가 native로 조율")
+    p_mcp = sub.add_parser("mcp", help="[experimental] MCP(stdio) 서버 — 조율(relay/agora/roster)을 MCP 툴로 노출 (한 세포). MCP 에이전트가 native로 조율")
     p_mcp.add_argument("--for", dest="for_id", default=None, help="이 서버가 대변하는 세포 id (생략 시 ORGANUM_CELL/owner)")
     p_mcp.set_defaults(func=cmd_mcp)
 
-    p_rel = sub.add_parser("relay", help="폴더 우체통 — 세포 간 비동기 편지 (send/inbox/read)")
+    p_rel = sub.add_parser("relay", help="[experimental] 폴더 우체통 — 세포 간 비동기 편지 (send/inbox/read)")
     rel_sub = p_rel.add_subparsers(dest="relay_cmd", required=True)
     rs = rel_sub.add_parser("send", help="편지 드롭 (.organum/relay/)")
     rs.add_argument("body", nargs="?", default=None, help="본문 (없으면 stdin)")
@@ -1782,7 +1812,7 @@ def build_parser() -> argparse.ArgumentParser:
     rw.add_argument("--idle", type=float, default=600.0, help="이 시간 새 편지 없으면 자멸(초, 기본 600)")
     p_rel.set_defaults(func=cmd_relay)
 
-    p_ros = sub.add_parser("roster", help="현장 세포 presence — 누가 있나·무엇을 하나·말 걸 수 있나 (서술적, 배정 아님)")
+    p_ros = sub.add_parser("roster", help="[experimental] 현장 세포 presence — 누가 있나·무엇을 하나·말 걸 수 있나 (서술적, 배정 아님)")
     p_ros.add_argument("--window", type=float, default=30.0, help="파생 관찰 window(분) — 이 안에 활동한 세포")
     p_ros.add_argument("--live-secs", dest="live_secs", type=float, default=90.0, help="live 판정 임계(초, 내용-timestamp)")
     ros_sub = p_ros.add_subparsers(dest="roster_cmd")
@@ -1794,7 +1824,7 @@ def build_parser() -> argparse.ArgumentParser:
     rmme.add_argument("--brain", help="모델 (선택 — 보통 transcript에서 자동)")
     p_ros.set_defaults(func=cmd_roster, roster_cmd=None)
 
-    p_ago = sub.add_parser("agora", help="토론장 — 개방 심의 필드 (모두 게시·모두 읽음, 주소지정 없음)")
+    p_ago = sub.add_parser("agora", help="[experimental] 토론장 — 개방 심의 필드 (모두 게시·모두 읽음, 주소지정 없음)")
     ago_sub = p_ago.add_subparsers(dest="agora_cmd", required=True)
     ap = ago_sub.add_parser("post", help="토론장에 게시 (.organum/agora/)")
     ap.add_argument("body", nargs="?", default=None, help="본문 (없으면 stdin)")
@@ -1829,7 +1859,7 @@ def build_parser() -> argparse.ArgumentParser:
     aw.add_argument("--idle", type=float, default=600.0, help="이 시간 새 글 없으면 자멸(초, 기본 600)")
     p_ago.set_defaults(func=cmd_agora)
 
-    p_hub = sub.add_parser("hub", help="크로스-워크스페이스 허브 — 다른 프로젝트의 셀과 persona@workspace로 핀포인트 편지 (broadcast 없음 · ~/.organum/hub/)")
+    p_hub = sub.add_parser("hub", help="[experimental] 로컬 크로스-워크스페이스 허브 (~/.organum/hub/; 정식 서명 봉투 CLI는 'organum-hub')")
     hub_sub = p_hub.add_subparsers(dest="hub_cmd", required=True)
     hs = hub_sub.add_parser("send", help="허브 편지 드롭 — 반드시 addressed (persona@workspace 또는 cell_key)")
     hs.add_argument("body", nargs="?", default=None, help="본문 (없으면 stdin)")
@@ -1866,7 +1896,7 @@ def build_parser() -> argparse.ArgumentParser:
     hl.add_argument("--json", action="store_true", help="기계용 JSON 배열")
     p_hub.set_defaults(func=cmd_hub)
 
-    p_alm = sub.add_parser("alarm", help="경보 필드 — 발동은 human/chief만, 모두가 읽음 (pause=정지 권고, 강제 아님)")
+    p_alm = sub.add_parser("alarm", help="[experimental] 경보 필드 — 발동은 human/chief만, 모두가 읽음 (pause=정지 권고, 강제 아님)")
     alm_sub = p_alm.add_subparsers(dest="alarm_cmd", required=True)
     als = alm_sub.add_parser("sound", help="경보 발동 (.organum/alarm/) — human 또는 chief(열린 세션)만")
     als.add_argument("body", nargs="?", default=None, help="사유 (없으면 stdin)")
@@ -1884,7 +1914,7 @@ def build_parser() -> argparse.ArgumentParser:
     alw.add_argument("--idle", type=float, default=600.0, help="이 시간 새 경보 없으면 자멸(초, 기본 600)")
     p_alm.set_defaults(func=cmd_alarm)
 
-    p_ses = sub.add_parser("session", help="세션 라이프사이클 — 의도 선언·진행 기록·회고 (state/discipline, 지휘 아님)")
+    p_ses = sub.add_parser("session", help="[experimental] 세션 라이프사이클 — 의도 선언·진행 기록·회고 (state/discipline, 지휘 아님)")
     ses_sub = p_ses.add_subparsers(dest="session_cmd", required=True)
     pss = ses_sub.add_parser("start", help="세션 선언 — 역할·의도 (roster me처럼 자기선언, 배정 아님)")
     pss.add_argument("--role", required=True, help="이 세션의 역할 (engine·reviewer·atelier·scribe·facilitator·chief 또는 커스텀)")
@@ -1912,7 +1942,7 @@ def build_parser() -> argparse.ArgumentParser:
     pse.add_argument("--for", dest="for_id", default=None, help="이 세포 id")
     p_ses.set_defaults(func=cmd_session)
 
-    p_join = sub.add_parser("join", help="세포 자기-온보딩 한 방 — id 자동·세션 선언·relay/agora 가입·[헌장+goal+inbox] (터미널당 한 줄)")
+    p_join = sub.add_parser("join", help="[experimental] 세포 자기-온보딩 한 방 — id 자동·세션 선언·relay/agora 가입·[헌장+goal+inbox] (터미널당 한 줄)")
     p_join.add_argument("--role", required=True, help="이 세포의 역할 — roles/<역할>.md 헌장을 받는다")
     p_join.add_argument("--intent", default=None, help="세션 의도 (생략 시 '<역할> 세션')")
     p_join.add_argument("--loadout", default=None,
@@ -1929,7 +1959,7 @@ def build_parser() -> argparse.ArgumentParser:
                              "— 하네스 온보딩 주입용")
     p_join.set_defaults(func=cmd_join)
 
-    p_occ = sub.add_parser("occupancy", help="기억 원장의 시간 버킷 점유 진단 — 버스트 단작 감지 (read-only)")
+    p_occ = sub.add_parser("occupancy", help="[stable] 기억 원장의 시간 버킷 점유 진단 — 버스트 단작 감지 (read-only)")
     p_occ.add_argument("--file", default=None, help="검사할 JSONL 경로 (생략 시 .organum/memory/memories.jsonl)")
     p_occ.add_argument("--capacity", type=int, default=24, help="전체 보존 슬롯 수 (기본 24)")
     p_occ.add_argument("--bucket-hours", dest="bucket_hours", type=float, default=24.0, help="시간 버킷 너비(시간, 기본 24)")
@@ -1937,7 +1967,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_occ.add_argument("--json", action="store_true", help="기계용 JSON 리포트 출력")
     p_occ.set_defaults(func=cmd_occupancy)
 
-    p_mf = sub.add_parser("manifest", help="기록 폴더 커버(## Files) 매니페스트 존재 검증 (read-only)")
+    p_mf = sub.add_parser("manifest", help="[stable] 기록 폴더 커버(## Files) 매니페스트 존재 검증 (read-only)")
     mf_sub = p_mf.add_subparsers(dest="manifest_cmd", required=True)
     p_mfc = mf_sub.add_parser("check", help="커버 표에 명명된 파일과 영수증이 폴더에 실재하는지 검증")
     p_mfc.add_argument("directory", nargs="?", default=".", help="검사할 기록 폴더 경로 (기본: 현재 디렉터리)")
@@ -1947,7 +1977,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_mfc.add_argument("--json", action="store_true", help="기계용 JSON 리포트 출력")
     p_mf.set_defaults(func=cmd_manifest)
 
-    p_sg = sub.add_parser("semver-gate", help="엄격한 SemVer 2.0.0 / CalVer 제약 검증 및 CLI 업그레이드 전이 분류 (read-only)")
+    p_sg = sub.add_parser("semver-gate", help="[stable] 엄격한 SemVer 2.0.0 / CalVer 제약 검증 및 CLI 업그레이드 전이 분류 (read-only)")
     sg_sub = p_sg.add_subparsers(dest="sg_cmd", required=True)
     p_sgc = sg_sub.add_parser("check", help="버전이 제약 스펙(예: '>= 1.0.0')을 만족하는지 판정")
     p_sgc.add_argument("version", help="검사할 버전 문자열")
@@ -1965,7 +1995,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sgt.add_argument("--json", action="store_true", help="기계용 JSON 출력")
     p_sg.set_defaults(func=cmd_semver_gate)
 
-    p_ch = sub.add_parser("chronicle", help="Git blob 지문 기반 YAML 원장 / 마크다운 연대기 파싱·비교 (read-only)")
+    p_ch = sub.add_parser("chronicle", help="[stable] Git blob 지문 기반 YAML 원장 / 마크다운 연대기 파싱·비교 (read-only)")
     ch_sub = p_ch.add_subparsers(dest="ch_cmd", required=True)
     p_chc = ch_sub.add_parser("check", help="원장/연대기 파일의 문법·중복 ID 검증 및 Git blob SHA-1 출력")
     p_chc.add_argument("file", help="검사할 YAML 또는 Markdown 파일")
@@ -1982,7 +2012,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_chd.add_argument("--json", action="store_true", help="기계용 JSON 출력")
     p_ch.set_defaults(func=cmd_chronicle)
 
-    p_ra = sub.add_parser("rule-audit", help="독립 불변조건 규칙 감사 — Verify the Verifier (read-only)")
+    p_ra = sub.add_parser("rule-audit", help="[stable] 독립 불변조건 규칙 감사 — Verify the Verifier (read-only)")
     ra_sub = p_ra.add_subparsers(dest="ra_cmd", required=True)
     p_rad = ra_sub.add_parser("demo", help="내장 FIFO 큐 자기검증 데모(정상·결함·escape 탐지) 실행")
     p_rad.add_argument("--json", action="store_true", help="기계용 JSON 출력")
@@ -1993,7 +2023,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_rac.add_argument("--json", action="store_true", help="기계용 JSON 출력")
     p_ra.set_defaults(func=cmd_rule_audit)
 
-    p_zr = sub.add_parser("zero-ref", help="영점 기준(c=0) 동시 통과 검사 — 공허한 일치 PASS 탐지 (read-only)")
+    p_zr = sub.add_parser("zero-ref", help="[stable] 영점 기준(c=0) 동시 통과 검사 — 공허한 일치 PASS 탐지 (read-only)")
     zr_sub = p_zr.add_subparsers(dest="zr_cmd", required=True)
     p_zrc = zr_sub.add_parser("check", help="단건 [lo, hi], 후보 c, 허용 오차 m에 대해 0 후보 통과 여부와 T=max(|lo|,|hi|) 판정")
     p_zrc.add_argument("--lo", required=True, help="기준 구간 하한 lo")

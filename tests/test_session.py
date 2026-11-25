@@ -49,7 +49,7 @@ class TestSessionModule(unittest.TestCase):
             soma = self._soma(td)
             rec = session.start(soma, "engine", "engine", "의도", "# c\n", loadout="relay,guard")
             self.assertEqual(rec["loadout"], ["relay", "guard"])
-            saved = json.loads((soma / "sessions" / f"{rec['sid']}.json").read_text())
+            saved = json.loads((soma / "sessions" / f"{rec['sid']}.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["loadout"], ["relay", "guard"])
 
     def test_problem_type_taxonomy_gate(self):
@@ -78,7 +78,7 @@ class TestSessionModule(unittest.TestCase):
             self.assertIsNone(rec["problem_type"])
             session.end(soma)
             sp = soma / "sessions" / f"{rec['sid']}.json"
-            d = json.loads(sp.read_text()); d.pop("problem_type")
+            d = json.loads(sp.read_text(encoding="utf-8")); d.pop("problem_type")
             sp.write_text(json.dumps(d), encoding="utf-8")
             got = [s for s in session.sessions_for_join(soma) if s["sid"] == rec["sid"]][0]
             self.assertIsNone(got["problem_type"])
@@ -92,7 +92,7 @@ class TestSessionModule(unittest.TestCase):
             session.end(soma)
             # 레거시 세션 모사: loadout 키 제거
             sp = soma / "sessions" / f"{rec['sid']}.json"
-            d = json.loads(sp.read_text()); d.pop("loadout")
+            d = json.loads(sp.read_text(encoding="utf-8")); d.pop("loadout")
             sp.write_text(json.dumps(d), encoding="utf-8")
             got = [s for s in session.sessions_for_join(soma) if s["sid"] == rec["sid"]][0]
             self.assertEqual(got["loadout"], ["*"])   # 레거시 = 전-preset 보정

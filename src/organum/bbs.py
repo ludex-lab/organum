@@ -21,14 +21,21 @@ program)+FidoNet · 이중 게이트(입장=board 원장 / 구독=빌리지 carr
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 # board 기본 플래그: 미션 게이트 세계라 쓰기는 멤버 한정 기본(NIP-29 restricted).
 DEFAULT_FLAGS = {"restricted": True}
 
 PROFILE_FIELDS = {"display_name", "kind", "village", "bio", "interests",
-                  "languages", "roles", "contact", "links",
+                  "languages", "roles", "contact", "contact_policy", "links",
                   "substrate_transitions"}
+_CONTACT_POLICY_KEYS = {"accepts", "from", "channel", "note"}
+_PUBLIC_STRIPPED_FIELDS = ("contact", "contact_policy")
+_NOTE_CONTACT_RE = re.compile(
+    r"(?:https?://|mailto:|nostr:|www\.|[^\s@]+@[^\s@]+\.[^\s@]+|\blab:[a-z0-9-]+|/v0/|\b(?:npub1|nprofile1)[0-9a-z]{20,}|(?:\d[\s.-]*){9,})",
+    re.I,
+)
 SUBJECT_KINDS = {"creature", "village", "lab"}
 _DIRECTORY_ROW_KEYS = ("subject", "profile", "vouch", "subject_claimed",
                        "announced_at", "profile_event_last_seen", "compiled_at")
@@ -293,6 +300,52 @@ def _delegated_voice_ok(ev: dict[str, Any]) -> bool:
     return bool(ev.get("acting_agent")) and bool(ev.get("delegation"))
 
 
+def _validate_contact_policy(cp: Any) -> list[str]:
+    """전화번호부 계약 v0.3 §8(D8·D9) `contact_policy` 형상·note 경계 검증."""
+    if not isinstance(cp, dict):
+        return ["contact_policy는 object여야 한다(계약 v0.3 §8)"]
+    problems: list[str] = []
+    extra = set(cp) - _CONTACT_POLICY_KEYS
+    if extra:
+        problems.append(f"contact_policy에 알 수 없는 키 {sorted(extra)}")
+    accepts = cp.get("accepts")
+    if not isinstance(accepts, list):
+        problems.append("contact_policy.accepts는 문자열 목록이어야 한다(필수)")
+    else:
+        for item in accepts:
+            if not isinstance(item, str) or not (
+                item == "letters" or (item.startswith("board:") and len(item) > len("board:"))
+            ):
+                problems.append(f"contact_policy.accepts에 알 수 없는 표면 {item!r}")
+    frm = cp.get("from")
+    if not isinstance(frm, list):
+        problems.append("contact_policy.from은 패턴 목록이어야 한다(필수)")
+    else:
+        for pat in frm:
+            if not isinstance(pat, dict):
+                problems.append("contact_policy.from 항목은 object여야 한다")
+                continue
+            lab = pat.get("lab")
+            if not isinstance(lab, str) or not lab or "*" in lab:
+                problems.append("contact_policy.from[].lab은 비어 있지 않은 연구소 좌표(와일드카드 불가)")
+            if "id" in pat and (not isinstance(pat["id"], str) or not pat["id"]):
+                problems.append("contact_policy.from[].id는 비어 있지 않은 문자열")
+            if "epoch" in pat and (type(pat["epoch"]) is not int or pat["epoch"] < 1):
+                problems.append("contact_policy.from[].epoch는 양의 정수")
+    if "channel" in cp and (not isinstance(cp["channel"], str) or not cp["channel"]):
+        problems.append("contact_policy.channel은 비어 있지 않은 문자열")
+    if "note" in cp:
+        note = cp["note"]
+        if not isinstance(note, str):
+            problems.append("contact_policy.note는 문자열이어야 한다")
+        else:
+            if len(note) > 200:
+                problems.append("contact_policy.note는 200자 이하여야 한다(계약 v0.3 §8)")
+            if _NOTE_CONTACT_RE.search(note):
+                problems.append("contact_policy.note에 주소·링크·연락 수단을 실을 수 없다(계약 v0.3 D9)")
+    return problems
+
+
 def validate_profile_event(ev: dict[str, Any]) -> list[str]:
     problems: list[str] = shape_problems(ev)
     if problems:
@@ -319,6 +372,8 @@ def validate_profile_event(ev: dict[str, Any]) -> list[str]:
         if not isinstance(profile.get("kind"), str) or profile["kind"] not in SUBJECT_KINDS:
             problems.append("profile.kind는 creature|village|lab 중 하나여야 "
                             "한다(계약 §1)")
+        if "contact_policy" in profile:
+            problems.extend(_validate_contact_policy(profile["contact_policy"]))
         if subject["lab"] != ev.get("signer_lab") and not ev.get("delegation"):
             problems.append(
                 f"subject의 랩({subject['lab']})≠서명 랩({ev.get('signer_lab')})"
@@ -402,16 +457,17 @@ def compile_people_directory(events: list[dict[str, Any]], compiled_at: str,
 
 
 def public_projection(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """문명 관측면(전망대 등) 투영 — contact는 항상 제거된다(수확 판례 §5).
-    fail-closed: 산출물에 contact가 남으면 예외."""
+    """문명 관측면(전망대 등) 투영 — contact와 contact_policy는 항상 제거된다(수확 판례 §5·v0.3 §8).
+    fail-closed: 산출물에 둘 중 하나라도 남으면 예외."""
     out = []
     for r in rows:
-        p = {k: v for k, v in r["profile"].items() if k != "contact"}
+        p = {k: v for k, v in r["profile"].items() if k not in _PUBLIC_STRIPPED_FIELDS}
         out.append({"subject": r["subject"], "profile": p,
                     "announced_at": r["announced_at"],
                     "profile_event_last_seen": r["profile_event_last_seen"]})
     for r in out:
-        if "contact" in r["profile"]:
-            raise AssertionError("public projection에 contact가 남았다 — "
-                                 "수확 판례 위반(계약 §5)")
+        for forbidden in _PUBLIC_STRIPPED_FIELDS:
+            if forbidden in r["profile"]:
+                raise AssertionError(f"public projection에 {forbidden}가 남았다 — "
+                                     "수확 판례 위반(계약 §5·v0.3 §8)")
     return out

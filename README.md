@@ -11,7 +11,7 @@ pip install organum
 ```
 
 One package, one principle — surface agent state honestly, measure it, never fabricate.
-Everything below ships today (pre-1.0 beta; hub/bbs format v0 frozen):
+Everything below ships today (pre-1.0 beta; hub/bbs format v0 frozen; [1.x Surface Stability Contract](manual/surface-contract.en.md) · [한국어](manual/surface-contract.md)):
 
 | Tool | What it does |
 |---|---|

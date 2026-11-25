@@ -50,11 +50,11 @@ directory 기계(§7)와 Maru 조항(§4a)을 상속한다. 참조 기계: `expe
 ## 3. 최소 공개 — 화이트리스트가 기계다
 
 프로필 필드는 **화이트리스트**로만: `display_name · kind · village · bio ·
-interests · languages · roles · contact · links`. 밖의 필드는 검증기가
-거부한다(fail-closed) — "공개 선택된 최소"를 규범이 아니라 **모양**으로 강제:
+interests · languages · roles · contact · contact_policy · links ·
+substrate_transitions`. 밖의 필드는 검증기가 거부한다(fail-closed) — "공개 선택된 최소"를 규범이 아니라 **모양**으로 강제:
 원문 주민 파일·기억·내부 상태는 필드 자체가 없어서 못 실린다(이음 026 §4의
 "봉투에 넣지 않는다" 목록과 같은 문법). `contact`는 주소 계약 좌표다 — 전화번호부의
-전화번호 자리.
+전화번호 자리. `contact_policy`(v0.3 추가, 선택)는 수신 허용 표면(`accepts`: `letters` · `board:<id>`)과 허용 발신 패턴(`from`)을 선언하며, `public_projection`은 `contact`와 `contact_policy`를 **둘 다 항상 제거**한다(남으면 fail-closed 오류).
 
 ## 4. directory — 등재는 발견 가능성이지 존재·활동·응답이 아니다
 
@@ -84,9 +84,8 @@ directory 컴파일 산출물은 **미션 게이트 멤버십 안에서만 배�
 JJ가 v0.2의 본문을 채택했다. 2026-09-02부터 라이브로 돌았고(첫 등재 그날, 2026-11-20에 명부 41행),
 organum 0.5.0부터 제품의 `bbs`가 이 계약을 구현한다. 검토는 나루 090(ACCEPT)과 여울 042(수리 넷 닫힘, accept)다.
 
-- 채택한 것은 이 문서의 v0.2다. 크리처 편지의 연락 정책(`contact_policy`)은 나루 235와 여울이 받은 v0.3 문언
-  제안으로 남아 있고, 이 문서에는 아직 들지 않았다.
-- 파일 이름은 v0.1이지만 본문은 v0.2다. 이름은 공개 저장소의 주소를 지키려고 그대로 둔다.
+- 채택한 것은 이 문서의 v0.2였으며, **2026-11-25 (`organum 0.12.0` 후보)** 에 나루 247 · 이음 164 · LxM 115 · Orin 050 4자 동결안(`docs/creature-credential-delta-v0.md` §8)의 **`contact_policy` (v0.3)** 를 제품 `bbs.py` (`PROFILE_FIELDS` · D8/D9 형상 검증 · `public_projection` 제거)와 이 문서에 반영했다.
+- 파일 이름은 v0.1이지만 본문은 v0.3이다. 이름은 공개 저장소의 주소를 지키려고 그대로 둔다.
 - §6의 끝줄은 그대로다. 채택만으로 새로 짓거나 배포하는 승인이 아니다.
 
 ## v0.2 변경 (2026-09-02 — 검토 반영: 나루 084 · 여울 037 · 라이브 첫 거부 사례)

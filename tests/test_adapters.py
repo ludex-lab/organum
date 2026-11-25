@@ -96,30 +96,33 @@ class TestCodexAdapterDiscover(unittest.TestCase):
     def test_filters_by_cwd(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); dd = _codex_dir(root)
-            (dd / "rollout-mine.jsonl").write_text(_codex_rollout("/want"), encoding="utf-8")
-            (dd / "rollout-other.jsonl").write_text(_codex_rollout("/other"), encoding="utf-8")
-            refs = adapters.CodexAdapter(root=root).discover("/want", window_min=60)
+            want, other = str(root / "want"), str(root / "other")
+            (dd / "rollout-mine.jsonl").write_text(_codex_rollout(want), encoding="utf-8")
+            (dd / "rollout-other.jsonl").write_text(_codex_rollout(other), encoding="utf-8")
+            refs = adapters.CodexAdapter(root=root).discover(want, window_min=60)
             self.assertEqual([r.name for r in refs], ["rollout-mine.jsonl"])
 
     def test_respects_window(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); dd = _codex_dir(root)
+            want = str(root / "want")
             old = dd / "rollout-old.jsonl"
-            old.write_text(_codex_rollout("/want"), encoding="utf-8")
+            old.write_text(_codex_rollout(want), encoding="utf-8")
             past = time.time() - 3600
             os.utime(old, (past, past))
-            self.assertEqual(adapters.CodexAdapter(root=root).discover("/want", window_min=30), [])
+            self.assertEqual(adapters.CodexAdapter(root=root).discover(want, window_min=30), [])
 
     def test_wide_window_reaches_old_date_dirs(self):
         # 광역 스윕(observatory)이 오늘/어제 너머 날짜 폴더도 봄 — warren Round One 누락 회귀
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); dd = _codex_dir(root, days_ago=3)
+            want = str(root / "want")
             old = dd / "rollout-r1.jsonl"
-            old.write_text(_codex_rollout("/want"), encoding="utf-8")
+            old.write_text(_codex_rollout(want), encoding="utf-8")
             past = time.time() - 3 * 86400
             os.utime(old, (past, past))
-            self.assertEqual(adapters.CodexAdapter(root=root).discover("/want", window_min=60), [])
-            refs = adapters.CodexAdapter(root=root).discover("/want", window_min=7 * 24 * 60)
+            self.assertEqual(adapters.CodexAdapter(root=root).discover(want, window_min=60), [])
+            refs = adapters.CodexAdapter(root=root).discover(want, window_min=7 * 24 * 60)
             self.assertEqual([r.name for r in refs], ["rollout-r1.jsonl"])
 
 
@@ -127,8 +130,9 @@ class TestSnapshot(unittest.TestCase):
     def test_normalizes_and_isolates(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td); dd = _codex_dir(root)
-            (dd / "rollout-a.jsonl").write_text(_codex_rollout("/want"), encoding="utf-8")
-            cells = adapters.snapshot("/want", window_min=60,
+            want = str(root / "want")
+            (dd / "rollout-a.jsonl").write_text(_codex_rollout(want), encoding="utf-8")
+            cells = adapters.snapshot(want, window_min=60,
                                       adapters=[adapters.CodexAdapter(root=root)])
             self.assertEqual(len(cells), 1)
             self.assertEqual(cells[0]["vendor"], "codex")
@@ -253,11 +257,12 @@ class TestAgyAdapter(unittest.TestCase):
     def test_discover_cwd_join(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
+            want, other = str(root / "want"), str(root / "elsewhere")
             tp1, u1 = _agy_dir(root, "11111111-aaaa-4ff3-8300-4ce98590345d")
-            tp1.write_text(_agy_transcript("/want"), encoding="utf-8")
+            tp1.write_text(_agy_transcript(want), encoding="utf-8")
             tp2, u2 = _agy_dir(root, "22222222-bbbb-4ff3-8300-4ce98590345d")
-            tp2.write_text(_agy_transcript("/elsewhere"), encoding="utf-8")
-            refs = adapters.AgyAdapter(root=root).discover("/want", window_min=100000)
+            tp2.write_text(_agy_transcript(other), encoding="utf-8")
+            refs = adapters.AgyAdapter(root=root).discover(want, window_min=100000)
             self.assertEqual([r.parents[2].name for r in refs], [u1])
 
 
@@ -370,9 +375,10 @@ class TestOpenCodeAdapter(unittest.TestCase):
     def test_discover_filters_by_cwd(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            _opencode_db(root, cwd="/want", sid="ses_mine")
-            _opencode_db(root, cwd="/other", sid="ses_other")
-            self.assertEqual(adapters.OpenCodeAdapter(root=root).discover("/want", window_min=60),
+            want, other = str(root / "want"), str(root / "other")
+            _opencode_db(root, cwd=want, sid="ses_mine")
+            _opencode_db(root, cwd=other, sid="ses_other")
+            self.assertEqual(adapters.OpenCodeAdapter(root=root).discover(want, window_min=60),
                              ["ses_mine"])
 
     def test_respects_window(self):
@@ -469,24 +475,26 @@ class TestClaudeAdapterSubagents(unittest.TestCase):
     """in-session 서브에이전트 = <부모세션uuid>/subagents/agent-*.jsonl — 발견·계보(parent)까지.
     (실측: 이 파일의 entrypoint는 'cli'라 sdk-cli 휴리스틱으로는 안 잡힌다 → 경로 판별.)"""
 
-    def _tree(self, root, cwd="/want"):
+    def _tree(self, root, cwd=None):
         from organum import inspect as ins
-        proj = root / str(Path(cwd)).replace("/", "-")
+        target = Path(cwd) if cwd is not None else (root / "want_cwd")
+        target.mkdir(parents=True, exist_ok=True)
+        proj = root / ins._mangle(target)
         proj.mkdir(parents=True)
         (proj / "aaaa1111-2222-3333.jsonl").write_text(_claude_line(), encoding="utf-8")
         sub = proj / "aaaa1111-2222-3333" / "subagents"
         sub.mkdir(parents=True)
         (sub / "agent-deadbeef99.jsonl").write_text(
             _claude_line(model="claude-opus-4-8", tool="Read"), encoding="utf-8")
-        return ins
+        return ins, target, proj
 
     def test_discover_includes_subagents(self):
         with tempfile.TemporaryDirectory() as td:
-            ins = self._tree(Path(td))
+            ins, target, _proj = self._tree(Path(td))
             orig = ins.CLAUDE_PROJECTS
             ins.CLAUDE_PROJECTS = Path(td)
             try:
-                refs = adapters.ClaudeAdapter().discover("/want", window_min=60)
+                refs = adapters.ClaudeAdapter().discover(target, window_min=60)
             finally:
                 ins.CLAUDE_PROJECTS = orig
             self.assertEqual(sorted(p.name for p in refs),
@@ -494,8 +502,8 @@ class TestClaudeAdapterSubagents(unittest.TestCase):
 
     def test_read_subagent_sets_origin_and_parent(self):
         with tempfile.TemporaryDirectory() as td:
-            self._tree(Path(td))
-            p = Path(td) / "-want" / "aaaa1111-2222-3333" / "subagents" / "agent-deadbeef99.jsonl"
+            _ins, _target, proj = self._tree(Path(td))
+            p = proj / "aaaa1111-2222-3333" / "subagents" / "agent-deadbeef99.jsonl"
             c = adapters.ClaudeAdapter().read(p)
             self.assertEqual(c["origin"], "subagent")
             self.assertEqual(c["parent"], "aaaa1111")     # 경로에서 확정 — 휴리스틱 불요
@@ -505,8 +513,8 @@ class TestClaudeAdapterSubagents(unittest.TestCase):
 
     def test_read_terminal_has_no_parent(self):
         with tempfile.TemporaryDirectory() as td:
-            self._tree(Path(td))
-            c = adapters.ClaudeAdapter().read(Path(td) / "-want" / "aaaa1111-2222-3333.jsonl")
+            _ins, _target, proj = self._tree(Path(td))
+            c = adapters.ClaudeAdapter().read(proj / "aaaa1111-2222-3333.jsonl")
             self.assertEqual(c["origin"], "terminal")
             self.assertIsNone(c["parent"])
 
@@ -523,7 +531,7 @@ class TestCursorAdapter(unittest.TestCase):
 
     def _tree(self, root: Path, cwd: str | None = None, updated_ms: int | None = None):
         import hashlib
-        cwd = cwd or self.CWD
+        cwd = str(Path(cwd)) if cwd is not None else str(root / "want" / "proj")
         sid = "aaaa1111-2222-3333-4444-555566667777"
         now_ms = int(time.time() * 1000)
         sess = root / "chats" / hashlib.md5(cwd.encode()).hexdigest() / sid
@@ -551,14 +559,14 @@ class TestCursorAdapter(unittest.TestCase):
         ]
         (tr / f"{sid}.jsonl").write_text(
             "\n".join(json.dumps(l) for l in lines) + "\n", encoding="utf-8")
-        return sid
+        return sid, cwd
 
     def test_discover_and_read(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            sid = self._tree(root)
+            sid, cwd = self._tree(root)
             ad = adapters.CursorAdapter(root=root)
-            refs = ad.discover(self.CWD, window_min=30)
+            refs = ad.discover(cwd, window_min=30)
             self.assertEqual(len(refs), 1)
             c = ad.read(refs[0])
             self.assertEqual(c["vendor"], "cursor")
@@ -577,16 +585,16 @@ class TestCursorAdapter(unittest.TestCase):
             root = Path(td)
             # meta.cwd가 다른 세션(md5 dir만 우연 일치 시나리오)은 걸러진다
             import hashlib
-            sid = self._tree(root)
-            fake = root / "chats" / hashlib.md5(self.CWD.encode()).hexdigest() / "bbbb"
+            sid, cwd = self._tree(root)
+            fake = root / "chats" / hashlib.md5(cwd.encode()).hexdigest() / "bbbb"
             fake.mkdir()
             (fake / "meta.json").write_text(json.dumps(
-                {"cwd": "/other", "updatedAtMs": int(time.time() * 1000)}), encoding="utf-8")
+                {"cwd": str(root / "other"), "updatedAtMs": int(time.time() * 1000)}), encoding="utf-8")
             ad = adapters.CursorAdapter(root=root)
-            self.assertEqual(len(ad.discover(self.CWD, window_min=30)), 1)
+            self.assertEqual(len(ad.discover(cwd, window_min=30)), 1)
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
-            self._tree(root, updated_ms=int(time.time() * 1000) - 3 * 3600 * 1000)
+            _, cwd = self._tree(root, updated_ms=int(time.time() * 1000) - 3 * 3600 * 1000)
             ad = adapters.CursorAdapter(root=root)
-            self.assertEqual(ad.discover(self.CWD, window_min=30), [])   # 창 밖
-            self.assertEqual(len(ad.discover(self.CWD, window_min=600)), 1)
+            self.assertEqual(ad.discover(cwd, window_min=30), [])   # 창 밖
+            self.assertEqual(len(ad.discover(cwd, window_min=600)), 1)
