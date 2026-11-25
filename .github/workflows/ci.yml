@@ -1,0 +1,119 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package (editable) and pytest
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest
+          python -m pip install -e .
+
+      - name: Assert stdlib-only zero runtime dependencies
+        run: |
+          python -B -c "import importlib.metadata as m; reqs = m.requires('organum') or []; assert not reqs, f'Unexpected runtime deps: {reqs}'; print('OK stdlib-only, version=', m.version('organum'))"
+
+      - name: Run full test suite
+        run: python -B -m pytest tests/ -q -rs --tb=short -p no:cacheprovider
+
+      - name: Smoke-test shipped CLIs
+        run: |
+          organum --version
+          organum-inspector --help
+          organum-hub --help
+          organum-bbs --help
+          organum rule-audit demo --json
+          organum semver-gate check 1.2.3 ">= 1.0.0" --json
+          organum zero-ref check --lo 0.50 --hi 0.80 --candidate 0.65 --margin 0.25 --json
+
+  cleanroom-and-gates:
+    name: cleanroom-wheel & vacuity-gate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run vacuity gate (dev repo)
+        if: ${{ hashFiles('scripts/find_self_comparisons.py') != '' }}
+        run: python -B scripts/find_self_comparisons.py src tests
+
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --upgrade pip build
+          python -B -m build --outdir dist
+
+      - name: Clean-room wheel install & 6-organ smoke outside repo
+        shell: bash
+        run: |
+          set -euo pipefail
+          WHEEL=$(ls dist/organum-*.whl)
+          CLEAN="$RUNNER_TEMP/organum-cleanroom"
+          rm -rf "$CLEAN"
+          mkdir -p "$CLEAN"
+          python -m venv "$CLEAN/venv"
+          "$CLEAN/venv/bin/pip" install --no-deps "$WHEEL"
+          cd "$CLEAN"
+          "$CLEAN/venv/bin/organum" --version
+          "$CLEAN/venv/bin/organum-inspector" --help > /dev/null
+          "$CLEAN/venv/bin/organum-hub" --help > /dev/null
+          "$CLEAN/venv/bin/organum-bbs" --help > /dev/null
+
+          # 1) occupancy
+          printf '{"ts":"2026-11-25T00:00:00Z","text":"a"}\n{"ts":"2026-11-25T01:00:00Z","text":"b"}\n' > mem.jsonl
+          "$CLEAN/venv/bin/organum" occupancy --file mem.jsonl --json > /dev/null
+
+          # 2) manifest check
+          mkdir -p rec
+          printf '# Record\n\n## Files\n\n| Group | File |\n|---|---|\n| demo | `note.txt` |\n' > rec/README.md
+          printf 'hello\n' > rec/note.txt
+          "$CLEAN/venv/bin/organum" manifest check rec --json | python -B -c "import json,sys; d=json.load(sys.stdin); assert d['passed'] and d['named_count']==1, d"
+
+          # 3) semver-gate
+          "$CLEAN/venv/bin/organum" semver-gate check 1.2.3 ">= 1.0.0, < 2.0.0" --json > /dev/null
+          "$CLEAN/venv/bin/organum" semver-gate transition "tool 1.2.3" "tool 1.3.0" --floor ">= 1.0.0" --json > /dev/null
+
+          # 4) chronicle
+          printf 'entries:\n  - id: S-01\n    state: active\n    date: 2026-11-25\n' > ledger.yaml
+          "$CLEAN/venv/bin/organum" chronicle check ledger.yaml --json > /dev/null
+
+          # 5) rule-audit
+          "$CLEAN/venv/bin/organum" rule-audit demo --json > /dev/null
+
+          # 6) zero-ref
+          "$CLEAN/venv/bin/organum" zero-ref check --lo 0.50 --hi 0.80 --candidate 0.65 --margin 0.25 --json > /dev/null
+          echo "OK clean-room wheel install + 6 verification organs passed"
